@@ -1,0 +1,146 @@
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# macOS file resource forks
+__MACOSX/
+
+# Temporary files and logs
+*.log
+*.tmp
+*.swp
+*.bak
+*.lock
+
+# Backup files
+*.~*
+*.bak
+*.old
+*.orig
+*.orig.*
+*~
+
+# R history and sessions
+.Rhistory
+.RData
+.Rproj.user/
+.Rapp.history
+
+# RStudio files
+.Rproj.user/
+*.Rproj
+.Ruserdata
+
+# R packages
+.Rcheck/
+
+# Python cache and compiled files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.pkl
+*.ipynb_checkpoints/
+*.so
+
+# Virtual environments
+venv/
+env/
+pip-log.txt
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Executables and compiled code
+*.out
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.dll
+*.class
+
+# C/C++ build files
+*.d
+*.mod
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Common alignment and variant files
+*.sam
+*.bam
+*.bai
+*.vcf
+*.vcf.gz
+*.bcf
+*.fasta
+*.fa
+*.fastq
+*.fq
+*.bed
+*.bedGraph
+*.wig
+
+# Sequence alignment and structure files
+*.aln
+*.tree
+*.gff
+*.gtf
+*.h5
+*.nhr
+*.nin
+*.nsq
+
+# Output from common tools like SHAPEIT, PLINK, etc.
+*.log
+*.ped
+*.map
+*.ibd
+*.haps
+*.sample
+*.pgen
+*.pvar
+*.psam
+
+# Docker specific files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Singularity
+*.sif
+
+# Hidden files
+.*.swp
+.*.swo
+
+# Generated reports, analysis files, or scripts
+*.csv
+*.tsv
+*.xlsx
+*.txt
+
+# Large datasets (potentially generated or downloaded)
+*.tar
+*.gz
+*.zip
+*.7z
+*.bz2
+*.lz4
+*.zst
+
+# Results from pipelines
+results/
+output/
+archive/
+
+# SVN and other VCS
+.svn/
+.hg/

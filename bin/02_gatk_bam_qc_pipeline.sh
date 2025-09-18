@@ -6,7 +6,7 @@
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 
-#<DEBUG>q
+#<DEBUG>
 set -e
 
 #<START>

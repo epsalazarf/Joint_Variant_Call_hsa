@@ -1,0 +1,6 @@
+name: project-env
+dependencies:
+  - python=3.11
+  - samtools
+  - gatk4
+  - r-base

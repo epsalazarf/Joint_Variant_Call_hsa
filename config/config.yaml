@@ -1,0 +1,3 @@
+# Example config file
+reference:
+  fasta: /path/to/ref.fa
