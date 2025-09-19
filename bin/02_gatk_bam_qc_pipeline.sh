@@ -31,27 +31,52 @@ fi
 ##</INPUT>
 
 ##<ENVIROMENT>
+# Threads (no significant benefit when >4)
 njobs=4
+
+# Path to config file (relative to repo root)
+CONFIG_FILE="$(dirname "$0")/../config/config.yaml"
+
+# Detect environment
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
-    echo "> Running on a remote cluster (SSH session detected)."
-    module load gatk/4.6.2.0
-    module load samtools/1.22.1
-    module load mosdepth/0.3.11
-    #module load fastqc/0.11.3 #update: v0.12.1
-    ##<REFERENCES>
-    # Human Genome FASTA references (with index)
-    #ref_gnm="/mnt/data/fsanchezq/esalazarf/References/hg38/ref_genome/GRCh38.p14.fa"
-    ref_gnm="/mnt/data/amedina/lupus/WGS/bam_files/hg38.fa"
-    # Human variant database (usually dbSNP)
-    ref_vars="/mnt/data/fsanchezq/esalazarf/References/hg38/dbsnp157/dbSNP157.canon_chr.vcf.gz"
+    env_type="remote"
 else
-    echo "> Running on a local machine (no SSH session detected)."
-    ##<REFERENCES>
-    # Human Genome FASTA references (with index)
-    ref_gnm="$HOME/Data/Rho/hg38.fa"
-    # Human variant database (usually dbSNP)
-    ref_vars="$HOME/Data/Rho/dbSNP157.canon_chr.vcf.gz"
+    env_type="local"
 fi
+
+echo "> Running on $env_type environment."
+
+# Parse YAML-ish config into Bash variables
+# This strips indentation, removes quotes, and exports as key=value
+eval "$(
+    awk -v env="$env_type" '
+        BEGIN { in_env=0 }
+        $1 ~ env":" { in_env=1; next }
+        in_env && /^[^[:space:]]/ { in_env=0 }
+        in_env && /^[[:space:]]+[a-zA-Z0-9_]+:/ {
+            gsub(":", "=", $1)
+            sub(/^[[:space:]]+/, "", $1)
+            gsub(/^"/, "", $2); gsub(/"$/, "", $2)
+            print $1 $2
+        }
+    ' "$CONFIG_FILE"
+)"
+
+# Load modules if specified
+if [ -n "$modules" ]; then
+    for m in $modules; do
+        module load "$m"
+    done
+fi
+
+# Sanity checks for required references
+if [ -z "$ref_gnm" ] || [ -z "$ref_vars" ]; then
+    echo "[!] WARNING: Missing required reference paths. Please check your config file: $CONFIG_FILE"
+    exit 1
+fi
+
+# {ARC01}
+
 
 echo "> References: "
 [ -f "${ref_gnm}" ] && echo "  - Genome: ${ref_gnm}" || ( echo " ERROR: Reference Genome not found (${ref_gnm})." ; exit 1 )
@@ -191,16 +216,41 @@ fi; echo; echo " [!] CHAIN NEGATED"
 
 # EX STEP: Cleaning up files
 echo ; echo -e "> EX01 Housekeeping: Remove intermediate files"
-if false; then
+if [ -f ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam ]; then
     rm -v \
         ${OUTPUT_PATH}/${BAM_base}.rmdup.ba* \
         ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.ba*
-fi; echo "[!] WARNING: Intermediate files not removed"
+    echo "[!] WARNING: Intermediate files removed"
+else
+    echo "[!] WARNING: Intermediate files not removed"
+fi;
 
 [ -f ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam ] \
     && ( echo; echo -e "<COMPLETED> GATK4 BAM QC [FENIX]"; echo "> Exiting..."; exit 0) \
     || ( echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. File not found: ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"; echo "> Exiting..."; exit 1)
 
 #<SANDBOX>
-
+#{ARC01}
+# if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
+#     echo "> Running on a remote cluster (SSH session detected)."
+#     module load gatk/4.6.2.0
+#     module load samtools/1.22.1
+#     module load mosdepth/0.3.11
+#     module load r
+#     #module load fastqc/0.11.3 #update: v0.12.1
+#     ##<REFERENCES>
+#     # Human Genome FASTA references (with index)
+#     #ref_gnm="/mnt/data/fsanchezq/esalazarf/References/hg38/ref_genome/GRCh38.p14.fa"
+#     ref_gnm="/mnt/data/amedina/lupus/WGS/bam_files/hg38.fa"
+#     # Human variant database (usually dbSNP)
+#     ref_vars="/mnt/data/fsanchezq/esalazarf/References/hg38/dbsnp157/dbSNP157.canon_chr.vcf.gz"
+# else
+#     echo "> Running on a local machine (no SSH session detected)."
+#     ##<REFERENCES>
+#     # Human Genome FASTA references (with index)
+#     ref_gnm="$HOME/Data/REFx/hg38.fa"
+#     # Human variant database (usually dbSNP)
+#     ref_vars="$HOME/Data/REFx/dbSNP157.canon_chr.vcf.gz"
+# fi
+#
 #<END>
