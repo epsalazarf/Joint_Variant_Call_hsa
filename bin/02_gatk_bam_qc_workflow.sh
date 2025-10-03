@@ -2,7 +2,7 @@
 
 # Title: GATK4 BAM QC [FENIX]
 # About: Quality control for mapped BAM files to ready. Adapted for LAVIS-FENIX.
-# Usage: gatk_mapped_bam_qc.sh [INPUT BAM] [OUTPUT PATH]
+# Usage: 02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH]
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 # Version notes: [+ALT] Reworked the steps in encapsulated functions for improved workflow management.
@@ -86,9 +86,9 @@ fi
 
 #GUARD: Reference files availability
 echo "> References used: "
-[ -f "${ref_gnm}" ] || ( echo " ERROR: Reference Genome not found (${ref_gnm})." ; exit 1 )
+[ -f "${ref_gnm}" ] || { echo " ERROR: Reference Genome not found (${ref_gnm})."; exit 1; }
 echo "  - Genome: ${ref_gnm}"
-[ -f "${ref_vars}" ] || ( echo " ERROR: Reference Variants not found (${ref_vars})." ; exit 1 )
+[ -f "${ref_vars}" ] || { echo " ERROR: Reference Variants not found (${ref_vars})."; exit 1; }
 echo "  - Variants: ${ref_vars}" 
 
 #</ENVIROMENT>
@@ -102,13 +102,13 @@ step0_add_readgroup() {
     local outfile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
 
     echo;echo -e "> [BAMQC] $step_name >>"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo "  &> $(date +%Y%m%d-%H%M)"
 
     #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
-    [ -s "$outfile" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; return )
+    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
     
     #COMMAND
     gatk AddOrReplaceReadGroups \
@@ -119,13 +119,13 @@ step0_add_readgroup() {
         --RGPU "$BAM_prefix" \
         --RGLB "$BAM_prefix" \
         --VERBOSITY ERROR \
-        --OUTPUT "$outfile"
+        --OUTPUT "${outfile}.tmp"
 
         #DETEMP
     mv "${outfile}.tmp" "$outfile"
 
     #CHECK
-    [ -s "$outfile" ] || ( echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile" ; exit 1 )
+    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
 }
 
@@ -137,13 +137,13 @@ step1_mark_duplicates() {
     local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
 
     echo;echo -e "> [BAMQC] $step_name >>"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo "  &> $(date +%Y%m%d-%H%M)"
 
     #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
-    [ -s "$outfile" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; return )
+    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
     #COMMAND
     gatk MarkDuplicatesSpark \
@@ -158,7 +158,7 @@ step1_mark_duplicates() {
     mv "${outfile}.tmp" "$outfile"
 
     #CHECK
-    [ -s "$outfile" ] || ( echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile" ; exit 1 )
+    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
 }
 
@@ -171,13 +171,13 @@ step2_mapping_quality_filter() {
 
     echo;echo -e "> [BAMQC] $step_name >>"
     echo -e "  > Command: samtools view -F 4 -q 30 $infile"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo "  &> $(date +%Y%m%d-%H%M)"
 
     #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
-    [ -s "$outfile" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; return )
+    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
     #COMMAND
     samtools view "$infile" \
@@ -191,7 +191,7 @@ step2_mapping_quality_filter() {
     mv "${outfile}.tmp" "$outfile"
 
     #CHECK
-    [ -s "$outfile" ] || ( echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile" ; exit 1 )
+    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
 }
 
@@ -205,13 +205,13 @@ step3_bqsr() {
     local plot="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.AnalyzeCovariates.pdf"
 
     echo;echo -e "> [BAMQC] $step_name >>"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo "  &> $(date +%Y%m%d-%H%M)"
 
      #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
-    [ -s "$bam_out" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; return )
+    [ -s "$bam_out" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
     # 3.1) Build the model for recalibration
     echo;echo "> Step 3a: Model Building  >>"
@@ -268,7 +268,7 @@ step3_bqsr() {
     ## ERROR: Required R LIBRARY NOT AVAILABLE ON FENIX
     echo;echo "> Step 3d: Analyze Covariates  >>"
     #SKIP
-    [ "$BQSR_COV" ] && ( echo " [!] Skipping AnalyzeCovariates (R library not available on this system)" ; return )
+    [ "$BQSR_COV" = true ] && { echo " [!] Skipping AnalyzeCovariates (R library not available on this system)"; return 0; }
     if [ -s "$plot" ]; then
         echo " [SKIP] Post-recalibration plots exist: $plot"
     else
@@ -289,14 +289,14 @@ step4_mosdepth() {
     local outfile="${prefix}.mosdepth.summary.txt"
 
     echo;echo -e "> [BAMQC] $step_name >>"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo "  &> $(date +%Y%m%d-%H%M)"
     echo -e "  > Command: mosdepth --fast-mode --no-per-base $prefix $infile"
 
     #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
-    [ -s "$outfile" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; return )
+    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
     
     #COMMAND
     mosdepth \
@@ -308,7 +308,7 @@ step4_mosdepth() {
         "$infile"
 
     #CHECK
-    [ -s "$outfile" ] || ( echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile" ; exit 1 )
+    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
 
 }
@@ -322,14 +322,14 @@ step5_metrics()
     local insert_metrics="${OUTPUT_PATH}/${BAM_base}.insert_size_metrics.txt"
     local insert_hist="${OUTPUT_PATH}/${BAM_base}.insert_size_histogram.pdf"
 
-    echo;echo -e "> [BAMQC] $step_name >>"
-    echo " &> $(date +%Y%m%d-%H%M)"
+    echo; echo -e "> [BAMQC] $step_name >>"
+    echo "  &> $(date +%Y%m%d-%H%M)"
    
     #TOGGLE
-    [ "$RUN_METRICS" ] || ( echo" [SKIP] $step_name disabled by user toggle" ; return )
+    [ "$RUN_METRICS" =  false ] || { echo " [SKIP] $step_name disabled by user toggle"; return 0; }
 
     #GUARD
-    [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     # Sub-step 5a: Alignment metrics
     echo;echo "  > QC Step 5a: Alignment summary metrics >>"
@@ -367,7 +367,7 @@ housekeeping() {
     echo ; echo -e "> [HK] Housekeeping: Remove intermediate files"
 
     #TOGGLE
-    [ "$RUN_METRICS" ] || ( echo " [SKIP] Housekeeping disabled by user toggle" ; return )
+    [ "$RUN_METRICS" ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
 
     if [ -f "${OUTPUT_PATH}"/"${BAM_base}".rmdup.mqfilt.bqsr.bam ]; then
         rm -v \

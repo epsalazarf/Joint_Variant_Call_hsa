@@ -2,7 +2,7 @@
 
 # Title: GATK4 BAM QC [FENIX]
 # About: Quality control for mapped BAM files to ready. Adapted for LAVIS-FENIX.
-# Usage: gatk_mapped_bam_qc.sh [INPUT BAM] [OUTPUT PATH]
+# Usage: 02_gatk_bam_qc_pipeline.sh [INPUT BAM] [OUTPUT PATH]
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 
