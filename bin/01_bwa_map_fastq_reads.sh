@@ -168,13 +168,13 @@ step2_bwa_mapping_per_lane() {
         [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
 
         # Inputs array
-        declare -a inputs_array
+        local inputs_array=()
         while IFS= read -r line; do
             inputs_array+=( "$line" )
         done < "${SAMPLE_NAME}_${lane}_bwa_inputs.txt"
 
         #SKIP
-        [ -f "$outfile" ] && ( echo " [!] $step_name already completed ($outfile exists)" ; continue )
+        [ -f "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; continue ;}
 
         echo "> Mapping reads to create: ${outfile}"
         
@@ -205,7 +205,7 @@ step2_bwa_mapping_per_lane() {
     done
 
 
-    echo " [DONE] $step_name"
+    echo;echo " [DONE] $step_name"
 }
 
 # Finisher: checks for final output and reports success and timing
