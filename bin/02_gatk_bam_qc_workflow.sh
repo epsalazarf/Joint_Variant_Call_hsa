@@ -17,15 +17,16 @@ script_timestamp=$(date +%s)
 
 ##<INPUT>
 echo;echo -e "> SETUP: Check Input Files >>"
-BAM_FILE=$1
-OUTPUT_PATH=$2
+BAM_FILE=$(readlink -f $1)
+OUTPUT_PATH=${2:-$PWD}
 
 if [ -f "$BAM_FILE" ]; then
     echo "> Input file: $BAM_FILE"
+    echo "> Output folder: ${OUTPUT_PATH}"
+    BAM_name=$(basename $1)
     BAM_base=${BAM_FILE%.*am}
     BAM_prefix=${BAM_FILE%%.*am}
-    OUTPUT_PATH="${OUTPUT_PATH:-$(pwd)}"
-    echo "> Output folder: ${OUTPUT_PATH}"
+    FINAL_FILE="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
 else
     echo -e "<ERROR> GATK4 BAM QC CANCELLED. File not found: ${BAM_FILE}"
     exit 1
@@ -39,6 +40,7 @@ njobs=4
 # Options
 BQSR_COV=true  # Run Step 3d (auto-off if remote)
 RUN_METRICS=false   # Run Step 5
+HOUSEKEEP=false
 
 # Path to config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -121,7 +123,7 @@ step0_add_readgroup() {
         --VERBOSITY ERROR \
         --OUTPUT "${outfile}.tmp"
 
-        #DETEMP
+    #DETEMP
     mv "${outfile}.tmp" "$outfile"
 
     #CHECK
@@ -170,7 +172,7 @@ step2_mapping_quality_filter() {
     local counts="${OUTPUT_PATH}/${BAM_base}.mqfilt-counts.txt"
 
     echo;echo -e "> [BAMQC] $step_name >>"
-    echo -e "  > Command: samtools view -F 4 -q 30 $infile"
+    #echo -e "  > Command: samtools view -F 4 -q 30 $infile"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
     #GUARD
@@ -179,13 +181,17 @@ step2_mapping_quality_filter() {
     #SKIP
     [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
+    set -o xtrace
     #COMMAND
     samtools view "$infile" \
-    -F 4 -q 30 \
-    -@ "$njobs" \
-    --write-index \
-    --save-counts "$counts" \
-    -b --output "${outfile}.tmp"
+        -F 4 -q 30 \
+        --threads "$njobs" \
+        --write-index \
+        --save-counts "$counts" \
+        --bam \
+        --output "${outfile}.tmp"
+    
+    set +o xtrace
 
     #DETEMP
     mv "${outfile}.tmp" "$outfile"
@@ -367,9 +373,9 @@ housekeeping() {
     echo ; echo -e "> [HK] Housekeeping: Remove intermediate files"
 
     #TOGGLE
-    [ "$RUN_METRICS" ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
+    [ "$HOUSEKEEP" ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
 
-    if [ -f "${OUTPUT_PATH}"/"${BAM_base}".rmdup.mqfilt.bqsr.bam ]; then
+    if [ -f "$FINAL_FILE" ]; then
         rm -v \
             "${OUTPUT_PATH}"/"${BAM_base}".rg.bam \
             "${OUTPUT_PATH}"/"${BAM_base}".rmdup.ba* \
@@ -378,19 +384,22 @@ housekeeping() {
     else
         echo "<ERROR> Final file not found. Intermediate files not removed."
     fi;
+}
 
-    if [ -f "${OUTPUT_PATH}"/"${BAM_base}".rmdup.mqfilt.bqsr.bam ]; then
+# Finisher: checks for final output and reports success and timing
+finisher(){
+    if [ -f "$FINAL_FILE" ]; then
         echo; echo -e "<SUCCESS> GATK4 BAM QC [FENIX] COMPLETED"
-        echo -e "> Final output: ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
+        echo -e "> Final output file: ${FINAL_FILE}"
         echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 0
     else 
-        echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. File not found: ${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
+        echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. Final output file not found: ${FINAL_FILE}"
+        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 1
     fi
-
 }
 #</FUNCTIONS>
 
@@ -404,6 +413,7 @@ main() {
     step4_mosdepth
     step5_metrics   # will self-skip if RUN_METRICS=false
     housekeeping
+    finisher
 }
 
 main "$@"
