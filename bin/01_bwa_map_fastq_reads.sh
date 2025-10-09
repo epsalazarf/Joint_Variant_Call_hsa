@@ -18,11 +18,14 @@ script_timestamp=$(date +%s)
 
 ##<INPUT>
 echo;echo -e "> SETUP: Check Input Files >>"
-SAMPLE_NAME=${1:-$(basename $PWD)}
+INPUT_DIR=${1:-$PWD}
+SAMPLE_NAME=$(basename "$INPUT_DIR")
 OUTPUT_PATH=${2:-$PWD}
+
 
 #GUARD
 if ls ./${SAMPLE_NAME}*.fq.gz > /dev/null 2>&1; then
+    echo "> Input directory: ${INPUT_DIR}"
     echo "> Sample name: ${SAMPLE_NAME}"
     echo "> Output folder: ${OUTPUT_PATH}"
 else
@@ -97,30 +100,29 @@ step0_map_reads_per_sample() {
 
     echo;echo -e ">> [BWAMAP] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
-    
-    file_list=$(find . -name "${SAMPLE_NAME}*.f*q.gz")
-    lanes=$(find . -name "${SAMPLE_NAME}*_1.f*q.gz" | sed -E 's/.*(L[0-9]+)_1.f.*q.gz/\1/' | sort -u)
 
-        #GUARD
-    [ -z "$lanes" ] && { echo "<ERROR> No files found with pattern: ${SAMPLE_NAME}*_1.f.*q.gz"; exit 1; }
+    barcode=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -E 's/.*_([a-zA-Z0-9]+)-.*f.*q.gz/\1/' | sort -u)
+    read_groups=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -E 's/.*-1A_(.*)_(L[0-9]+)_.*f.*q.gz/\1_\2/' | sort -u)
 
-    echo "  Lanes found:" 
+    #GUARD
+    [ -z "$read_groups" ] && { echo "<ERROR> No files found with pattern: ${SAMPLE_NAME}*_1.f.*q.gz"; exit 1; }
 
-    for lane in $lanes; do
-        echo "  > ${lane}:"
-        R1=$(find . -type f -name "${SAMPLE_NAME}*_${lane}_1.f*q.gz")
+    echo "  Read groups found:" 
+    for rg in $read_groups; do
+        echo "  > ${rg}:"
+        R1=$(find . -name "${SAMPLE_NAME}*_${rg}_1.f*q.gz")
         echo "  $R1"
-        R2=$(find . -type f -name "${SAMPLE_NAME}*_${lane}_2.f*q.gz")
+        R2=$(find . -name "${SAMPLE_NAME}*_${rg}_2.f*q.gz")
         echo "  $R2"
 
-        # read group ID = sample + lane
-        RGID="$(basename ${SAMPLE_NAME})_${lane}"
-        RGLB="$(basename ${SAMPLE_NAME})"
-        RGSM="$(basename ${SAMPLE_NAME})"
-        RGPL="ILLUMINA"
+        rgSM="$SAMPLE_NAME"
+        rgID="${rg/_/.}"
+        rgLB="$barcode"
+        rgPU="${rgID}.${rgLB}"
+        rgPL="ILLUMINA"
 
-        echo -n "@RG\tID:${RGID}\tSM:${RGSM}\tLB:${RGLB}\tPL:${RGPL}" > "${OUTPUT_PATH}/${SAMPLE_NAME}_${lane}_bwa_inputs.txt"
-        echo -e "\n$R1\n$R2" >> "${OUTPUT_PATH}/${SAMPLE_NAME}_${lane}_bwa_inputs.txt"
+        echo -n "@RG\tID:${rgID}\tPL:${rgPL}\tPU:${rgPU}\tLB:${rgLB}\tSM:${rgSM}" > "${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+        echo -e "\n$R1\n$R2" >> "${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
 
     done
     echo;echo " [DONE] $step_name"
@@ -153,16 +155,16 @@ step1_reads_quality() {
 }
 
 # QC STEP 2: Map Reads to Reference
-step2_bwa_mapping_per_lane() {
+step2_bwa_mapping_per_readgroup() {
     local step_name="Step 2: BWA Mapping to Reference"
 
     echo;echo -e "> [BWAMAP] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
-    for lane in $lanes; do
-        echo;echo "> Processing: $SAMPLE_NAME [$lane]..."
-        local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${lane}_bwa_inputs.txt"
-        local outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.${lane}.paired.bam"
+    for rg in $read_groups; do
+        echo;echo "> Processing: $SAMPLE_NAME [$rg]..."
+        local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+        local outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
 
         #GUARD
         [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
@@ -171,7 +173,7 @@ step2_bwa_mapping_per_lane() {
         local inputs_array=()
         while IFS= read -r line; do
             inputs_array+=( "$line" )
-        done < "${SAMPLE_NAME}_${lane}_bwa_inputs.txt"
+        done < "${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
 
         #SKIP
         [ -f "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; continue ;}
@@ -183,7 +185,7 @@ step2_bwa_mapping_per_lane() {
         bwa mem \
             -t "$njobs" \
             -R "${inputs_array[0]}" \
-            -v 1 \
+            -v 0 \
             "$ref_gnm" \
             "${inputs_array[1]}" \
             "${inputs_array[2]}" |
@@ -208,31 +210,61 @@ step2_bwa_mapping_per_lane() {
     echo;echo " [DONE] $step_name"
 }
 
+step4_sort_mapped_bams() {
+    #NOTE: placeholder, not tested
+    local step_name="Step 4: sort and index BAM files"
+
+    echo; echo -e "> [BWAMAP] $step_name >>"
+    echo "  &> $(date +%Y%m%d-%H%M)"
+    
+    #COMMAND
+    for rg in $read_groups; do
+        local infile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
+        local outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired-sort.bam"
+        
+        #SKIP
+        [ -f "$outfile" ] && { echo " [!] $step_name already sorted ($outfile exists). Skipping."; continue ;}
+        
+        echo; echo "> Sorting and indexing: ${SAMPLE_NAME}.${rg}.paired.bam"
+        set -o xtrace
+        samtools sort "$infile" -O bam -o "$outfile".tmp -@ "$njobs"
+
+        #DETEMP
+        mv "${outfile}.tmp" "$outfile"
+
+        samtools index "$outfile" -@ "$njobs"
+        set +o xtrace
+
+        echo "> Job finished: ${outfile}"
+    done
+}
+
 # Finisher: checks for final output and reports success and timing
 finisher() {
-    if [ -f "${OUTPUT_PATH}/${SAMPLE_NAME}.${lane}.paired.bam" ]; then
+    if [ -f "${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam" ]; then
         echo; echo -e "<SUCCESS> GATK4 BAM QC [FENIX] COMPLETED"
-        echo -e "> Last output(s): ${OUTPUT_PATH}/${SAMPLE_NAME}.${lane}.paired.bam"
+        echo -e "> Last output(s): ${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
         echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 0
     else 
-        echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. File not found: ${SAMPLE_NAME}.${lane}.paired.bam"
+        echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. File not found: ${SAMPLE_NAME}.${rg}.paired.bam"
         echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 1
     fi
 }
-#</FUNCTIONS>
 
+#</FUNCTIONS>
 
 #<MAIN>
 main() {
     step0_map_reads_per_sample
     step1_reads_quality
-    step2_bwa_mapping_per_lane
+    step2_bwa_mapping_per_readgroup
     #step2a_bwa_mapping_per_sample
     #step3_merge_sample_bams
+    #step4_sort_mapped_bams
     finisher
 }
 
@@ -240,7 +272,5 @@ main "$@"
 #</MAIN>
 
 #<MISC>
-#samtools sort Q064_D.L2.paired.bam -O bam -o Q064_D_L2.paired-sort.bam -@ 8
-#samtools index Q064_D_L2.paired-sort.bam -@ 8
 
 #<END>

@@ -92,9 +92,9 @@ echo "  - Variants: ${ref_vars}"
 
 #<FUNCTIONS>
 
-# MAP STEP 1: Check Quality
+# VARCALL STEP 1: Haplotype Caller
 step1_run_haplotype_caller() {
-    local step_name="Step 1: Check Reads Quality"
+    local step_name="Step 1: Haplotype Caller"
     local infile="$BAM_FILE"
     local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
 
