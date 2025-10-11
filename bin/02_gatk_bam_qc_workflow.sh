@@ -2,7 +2,7 @@
 
 # Title: GATK4 BAM QC [FENIX]
 # About: Quality control for mapped BAM files to ready. Adapted for LAVIS-FENIX.
-# Usage: 02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH]
+# Usage: 02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH] [RG STRING]
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 # Version notes: [+ALT] Reworked the steps in encapsulated functions for improved workflow management.
@@ -17,8 +17,9 @@ script_timestamp=$(date +%s)
 
 ##<INPUT>
 echo;echo -e "> SETUP: Check Input Files >>"
-BAM_FILE=$(readlink -f $1)
+BAM_FILE=$1
 OUTPUT_PATH=${2:-$PWD}
+rg_string=${3:-""}
 
 if [ -f "$BAM_FILE" ]; then
     echo "> Input file: $BAM_FILE"
@@ -113,13 +114,28 @@ step0_add_readgroup() {
     [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
     
     #COMMAND
+    if [[ "$rg_string" == @RG* ]]
+    then
+        local rgID="$(sed -E 's/.*ID:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
+        local rgPL="$(sed -E 's/.*PL:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
+        local rgPU="$(sed -E 's/.*PU:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
+        local rgLB="$(sed -E 's/.*LB:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
+        local rgSM="$(sed -E 's/.*SM:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
+    else
+        local rgID="$BAM_prefix"
+        local rgPL="ILLUMINA"
+        local rgPU="$BAM_prefix"
+        local rgLB="$BAM_prefix"
+        local rgSM="$BAM_prefix"
+    fi
+
     gatk AddOrReplaceReadGroups \
         --INPUT "$infile" \
-        --RGID "$BAM_prefix" \
-        --RGSM "$BAM_prefix" \
-        --RGPL "ILLUMINA" \
-        --RGPU "$BAM_prefix" \
-        --RGLB "$BAM_prefix" \
+        --RGID "$rgID" \
+        --RGPL "$rgPL" \
+        --RGPU "$rgPU" \
+        --RGLB "$rgLB" \
+        --RGSM "$rgSM" \
         --VERBOSITY ERROR \
         --OUTPUT "${outfile}.tmp"
 
@@ -305,6 +321,7 @@ step4_mosdepth() {
     [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
     
     #COMMAND
+    set -o xtrace
     mosdepth \
         --threads "$njobs" \
         --fast-mode \
@@ -312,6 +329,7 @@ step4_mosdepth() {
         --fasta "$ref_gnm" \
         "$prefix" \
         "$infile"
+    set +o xtrace
 
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }

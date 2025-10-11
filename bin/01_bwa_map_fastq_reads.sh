@@ -101,8 +101,8 @@ step0_map_reads_per_sample() {
     echo;echo -e ">> [BWAMAP] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
-    barcode=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -E 's/.*_([a-zA-Z0-9]+)-.*f.*q.gz/\1/' | sort -u)
-    read_groups=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -E 's/.*-1A_(.*)_(L[0-9]+)_.*f.*q.gz/\1_\2/' | sort -u)
+    barcode=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -nE 's/.*_([a-zA-Z0-9]+)-.*f.*q.gz/\1/' | sort -u)
+    read_groups=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -nE 's/.*-1A_(.*)_(L[0-9]+)_.*f.*q.gz/\1_\2/' | sort -u)
 
     #GUARD
     [ -z "$read_groups" ] && { echo "<ERROR> No files found with pattern: ${SAMPLE_NAME}*_1.f.*q.gz"; exit 1; }
