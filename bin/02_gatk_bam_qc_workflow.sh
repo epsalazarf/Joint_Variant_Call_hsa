@@ -41,7 +41,7 @@ njobs=4
 # Options
 BQSR_COV=true  # Run Step 3d (auto-off if remote)
 RUN_METRICS=false   # Run Step 5
-HOUSEKEEP=false
+HOUSEKEEP=true
 
 # Path to config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -173,7 +173,7 @@ step1_mark_duplicates() {
         --output "${outfile}.tmp"
     
     #DETEMP
-    mv "${outfile}.tmp" "$outfile"
+    rename -v "${outfile}.tmp" "${outfile}" "${outfile}.tmp"*
 
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
@@ -210,7 +210,7 @@ step2_mapping_quality_filter() {
     set +o xtrace
 
     #DETEMP
-    mv "${outfile}.tmp" "$outfile"
+    rename -v "${outfile}.tmp" "${outfile}" "${outfile}.tmp"*
 
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
@@ -264,7 +264,8 @@ step3_bqsr() {
             --create-output-bam-index \
             --verbosity ERROR \
             --output "${bam_out}.tmp"
-        mv "${bam_out}.tmp" "$bam_out"
+        #DETEMP
+        rename -v "${bam_out}.tmp" "${bam_out}" "${bam_out}.tmp"*
         echo " [DONE] Recalibrated BAM created"
     fi
 
@@ -289,8 +290,11 @@ step3_bqsr() {
     # 3.4) Apply the model to adjust the base quality scores
     ## ERROR: Required R LIBRARY NOT AVAILABLE ON FENIX
     echo;echo "> Step 3d: Analyze Covariates  >>"
+    
     #SKIP
-    [ "$BQSR_COV" = true ] && { echo " [!] Skipping AnalyzeCovariates (R library not available on this system)"; return 0; }
+    [ "$BQSR_COV" = true ] || { echo " [!] Skipping AnalyzeCovariates (R library not available on this system)"; return 0; }
+
+    #SKIP
     if [ -s "$plot" ]; then
         echo " [SKIP] Post-recalibration plots exist: $plot"
     else
@@ -350,7 +354,7 @@ step5_metrics()
     echo "  &> $(date +%Y%m%d-%H%M)"
    
     #TOGGLE
-    [ "$RUN_METRICS" =  false ] || { echo " [SKIP] $step_name disabled by user toggle"; return 0; }
+    [ "$RUN_METRICS" = true ] || { echo " [SKIP] $step_name disabled by user toggle"; return 0; }
 
     #GUARD
     [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
@@ -391,7 +395,7 @@ housekeeping() {
     echo ; echo -e "> [HK] Housekeeping: Remove intermediate files"
 
     #TOGGLE
-    [ "$HOUSEKEEP" ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
+    [ "$HOUSEKEEP" = true ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
 
     if [ -f "$FINAL_FILE" ]; then
         rm -v \
@@ -429,7 +433,7 @@ main() {
     step2_mapping_quality_filter
     step3_bqsr
     step4_mosdepth
-    step5_metrics   # will self-skip if RUN_METRICS=false
+    step5_metrics
     housekeeping
     finisher
 }
