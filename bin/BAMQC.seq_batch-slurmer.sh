@@ -9,7 +9,7 @@ DIR_PATH="$3"
 
 
 
-if [[ -z "$BATCH_LIST" || -z "$BATCH_SCRIPT" || -z "$TARGET_DIR" ]]; then
+if [[ -z "$BATCH_LIST" || -z "$BATCH_SCRIPT" || -z "$DIR_PATH" ]]; then
   echo "Usage: $0 <batch-list.txt> <02_gatk_bam_qc_workflow.sh> <files directory>"
   exit 1
 fi

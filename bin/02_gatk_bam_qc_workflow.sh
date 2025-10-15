@@ -39,9 +39,9 @@ fi
 njobs=4
 
 # Options
-BQSR_COV=false  # Run Step 3d (auto-off if remote)
-RUN_METRICS=false   # Run Step 5
-HOUSEKEEP=false
+BQSR_COV=true  # Run Step 3d (auto-off if remote)
+RUN_METRICS=true   # Run Step 5
+HOUSEKEEP=true
 
 # Path to config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -169,7 +169,7 @@ step1_mark_duplicates() {
     #COMMAND
     gatk MarkDuplicatesSpark \
         --input "$infile" \
-        --conf 'spark.executor.cores=8' \
+        --conf "spark.executor.cores=${njobs}" \
         --remove-all-duplicates \
         --verbosity ERROR \
         --metrics-file "$metrics" \
