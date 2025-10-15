@@ -5,7 +5,7 @@
 # Usage: 02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH] [RG STRING]
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
-# Version notes: [+ALT] Reworked the steps in encapsulated functions for improved workflow management.
+# Version notes: [+Workflow] Reworked the steps in encapsulated functions for improved workflow management.
 
 #<DEBUG>
 set -e
@@ -39,9 +39,9 @@ fi
 njobs=4
 
 # Options
-BQSR_COV=true  # Run Step 3d (auto-off if remote)
+BQSR_COV=false  # Run Step 3d (auto-off if remote)
 RUN_METRICS=false   # Run Step 5
-HOUSEKEEP=true
+HOUSEKEEP=false
 
 # Path to config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -103,6 +103,7 @@ step0_add_readgroup() {
     local step_name="Step 0: ReadGroup Assignation"
     local infile="$BAM_FILE"
     local outfile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
+    local step_timestamp=$(date +%s)
 
     echo;echo -e "> [BAMQC] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
@@ -145,11 +146,13 @@ step0_add_readgroup() {
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
+    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 # QC STEP 1: GATK Remove duplicates
 step1_mark_duplicates() {
     local step_name="Step 1: Remove Duplicates"
+    local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
     local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
     local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
@@ -178,11 +181,13 @@ step1_mark_duplicates() {
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
+    echo "> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 # QC STEP 2: Filter by mapping quality
 step2_mapping_quality_filter() {
     local step_name="Step 2: Mapping Quality Filter"
+    local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
     local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bam"
     local counts="${OUTPUT_PATH}/${BAM_base}.mqfilt-counts.txt"
@@ -215,11 +220,13 @@ step2_mapping_quality_filter() {
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
+    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 # QC STEP 3: Base Quality Recalibration
 step3_bqsr() {
     local step_name="Step 3: Base Quality Recalibration"
+    local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bam"
     local table="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr_table.txt"
     local bam_out="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
@@ -229,7 +236,7 @@ step3_bqsr() {
     echo;echo -e "> [BAMQC] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
-     #GUARD
+    #GUARD
     [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
 
     #SKIP
@@ -269,6 +276,8 @@ step3_bqsr() {
         echo " [DONE] Recalibrated BAM created"
     fi
 
+    echo "  &> Step Time (3a+3b): $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+
     # 3.3) Evaluate and compare base quality score recalibration tables
     #COMMAND
     echo;echo "> Step 3c: Evaluate Recalibration  >>"
@@ -292,7 +301,7 @@ step3_bqsr() {
     echo;echo "> Step 3d: Analyze Covariates  >>"
     
     #SKIP
-    [ "$BQSR_COV" = true ] || { echo " [!] Skipping AnalyzeCovariates (R library not available on this system)"; return 0; }
+    [ "$BQSR_COV" = true ] || { echo " [!] Skipping AnalyzeCovariates: disabled by user toggle"; return 0; }
 
     #SKIP
     if [ -s "$plot" ]; then
@@ -310,6 +319,7 @@ step3_bqsr() {
 step4_mosdepth() {
 # QC STEP 4: Calculation of coverage with mosdepth from samtools
     local step_name="Step 4: Calculate coverage (mosdepth)"
+    local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
     local prefix="${OUTPUT_PATH}/${BAM_base}.rmb"
     local outfile="${prefix}.mosdepth.summary.txt"
@@ -338,13 +348,14 @@ step4_mosdepth() {
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
-
+    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 # QC STEP 5: Alignment & Insert Size Metrics (optional)
 step5_metrics()
 {
     local step_name="Step 5: Collect Alignment & Insert Size Metrics"
+    local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
     local align_metrics="${OUTPUT_PATH}/${BAM_base}.alignment_metrics.txt"
     local insert_metrics="${OUTPUT_PATH}/${BAM_base}.insert_size_metrics.txt"
@@ -388,6 +399,8 @@ step5_metrics()
         mv "${insert_hist}.tmp" "$insert_hist"
         echo " [DONE] Insert size metrics generated"
     fi
+
+    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 # HK Step: Remove intermediate files (optional)
@@ -418,7 +431,7 @@ finisher(){
         exit 0
     else 
         echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. Final output file not found: ${FINAL_FILE}"
-        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+        echo "> Total Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 1
     fi
@@ -439,5 +452,7 @@ main() {
 }
 
 main "$@"
+
+#</MAIN>
 
 #<END>
