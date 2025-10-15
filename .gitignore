@@ -139,7 +139,7 @@ docker-compose.yml
 # Results from pipelines
 results/
 output/
-archive/
+temp/
 
 # SVN and other VCS
 .svn/
