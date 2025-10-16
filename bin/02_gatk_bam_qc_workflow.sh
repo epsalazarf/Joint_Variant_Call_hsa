@@ -150,7 +150,7 @@ step0_add_readgroup() {
 }
 
 # QC STEP 1: GATK Remove duplicates
-step1_mark_duplicates() {
+step1_mark_duplicates_spark() {
     local step_name="Step 1: Remove Duplicates"
     local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
@@ -167,13 +167,15 @@ step1_mark_duplicates() {
     [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
     #COMMAND
-    gatk MarkDuplicatesSpark \
+    gatk --java-options "-Xmx24G" MarkDuplicatesSpark \
         --input "$infile" \
-        --conf "spark.executor.cores=${njobs}" \
+        --spark-runner LOCAL \
+        --spark-master local[${njobs}] \
         --remove-all-duplicates \
         --verbosity ERROR \
         --metrics-file "$metrics" \
         --output "${outfile}.tmp"
+        #--conf "spark.executor.cores=${njobs}" \
     
     #DETEMP
     rename -v "${outfile}.tmp" "${outfile}" "${outfile}.tmp"*
@@ -231,7 +233,7 @@ step3_bqsr() {
     local table="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr_table.txt"
     local bam_out="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
     local table_recal="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr_table_recal.txt"
-    local plot="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.AnalyzeCovariates.pdf"
+    local cov_report="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.cov"
 
     echo;echo -e "> [BAMQC] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
@@ -304,15 +306,17 @@ step3_bqsr() {
     [ "$BQSR_COV" = true ] || { echo " [!] Skipping AnalyzeCovariates: disabled by user toggle"; return 0; }
 
     #SKIP
-    if [ -s "$plot" ]; then
-        echo " [SKIP] Post-recalibration plots exist: $plot"
+    if [ -s "$cov_report".pdf ]; then
+        echo " [SKIP] Post-recalibration plots exist: ${cov_report}.pdf"
     else
         #COMMAND
         gatk AnalyzeCovariates \
-            -before "$table" \
-            -after "$table_recal" \
+            --before-report-file "$table" \
+            --after-report-file "$table_recal" \
             --verbosity ERROR \
-            -plots "$plot"
+            --intermediate-csv-file "${cov_report}.csv" \
+            --plots-report-file "${cov_report}.pdf"
+
     fi
 }
 
@@ -442,7 +446,7 @@ finisher(){
 
 main() {
     step0_add_readgroup
-    step1_mark_duplicates
+    step1_mark_duplicates_spark
     step2_mapping_quality_filter
     step3_bqsr
     step4_mosdepth
