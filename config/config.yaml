@@ -4,7 +4,7 @@ about: Config file for references and modules
 remote:
   ref_gnm: "/mnt/data/amedina/lupus/WGS/bam_files/hg38.fa"
   ref_vars: "/mnt/data/fsanchezq/esalazarf/References/hg38/dbsnp157/dbSNP157.canon_chr.vcf.gz"
-  modules: "gatk samtools mosdepth r"
+  modules: "gatk samtools mosdepth r/4.4.1"
 
 local:
   ref_gnm: "$HOME/Data/REFx/GRCh38.p14/GRCh38.p14.fa"

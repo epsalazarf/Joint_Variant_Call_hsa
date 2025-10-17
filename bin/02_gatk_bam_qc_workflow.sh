@@ -26,13 +26,16 @@ if [ -f "$BAM_FILE" ]; then
     echo "> Output folder: ${OUTPUT_PATH}"
     BAM_name=$(basename $1)
     BAM_base=${BAM_FILE%.*am}
-    BAM_prefix=${BAM_FILE%%.*am}
+    BAM_sample=${BAM_FILE%%.*am}
     FINAL_FILE="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
 else
     echo -e "<ERROR> GATK4 BAM QC CANCELLED. File not found: ${BAM_FILE}"
     exit 1
 fi
 ##</INPUT>
+
+#OMNI SKIP
+[ -s "$FINAL_FILE" ] && { echo " <SKIP> GATK4 BAM QC for $BAM_sample already completed ($FINAL_FILE exists)." ; return 0; }
 
 ##<ENVIROMENT>
 # Threads (no significant benefit when >4)
@@ -123,11 +126,11 @@ step0_add_readgroup() {
         local rgLB="$(sed -E 's/.*LB:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
         local rgSM="$(sed -E 's/.*SM:([a-zA-Z0-9_.]+).*/\1/' <<< "$rg_string")"
     else
-        local rgID="$BAM_prefix"
+        local rgID="$BAM_sample"
         local rgPL="ILLUMINA"
-        local rgPU="$BAM_prefix"
-        local rgLB="$BAM_prefix"
-        local rgSM="$BAM_prefix"
+        local rgPU="$BAM_sample"
+        local rgLB="$BAM_sample"
+        local rgSM="$BAM_sample"
     fi
 
     gatk AddOrReplaceReadGroups \
