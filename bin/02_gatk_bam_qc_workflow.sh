@@ -154,7 +154,7 @@ step0_add_readgroup() {
 
 # QC STEP 1: GATK Remove duplicates
 step1_mark_duplicates_spark() {
-    local step_name="Step 1: Remove Duplicates"
+    local step_name="Step 1: Remove Duplicates (Spark)"
     local step_timestamp=$(date +%s)
     local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
     local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
@@ -180,6 +180,37 @@ step1_mark_duplicates_spark() {
         --output "${outfile}.tmp"
         #--conf "spark.executor.cores=${njobs}" \
     
+    #DETEMP
+    rename -v "${outfile}.tmp" "${outfile}" "${outfile}.tmp"*
+
+    #CHECK
+    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
+    echo " [DONE] $step_name"
+    echo "> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+}
+
+step1_mark_duplicates_picard() {
+    local step_name="Step 1: Remove Duplicates (Picard)"
+    local step_timestamp=$(date +%s)
+    local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
+    local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
+    local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
+
+    echo;echo -e "> [BAMQC] $step_name >>"
+    echo "  &> $(date +%Y%m%d-%H%M)"
+
+    #GUARD
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+
+    #SKIP
+    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
+    gatk MarkDuplicates \
+    --INPUT "$infile" \
+    --REMOVE_DUPLICATES \
+    --VERBOSITY ERROR \
+    --METRICS_FILE "$metrics" \
+    --OUTPUT "${outfile}.tmp"
+
     #DETEMP
     rename -v "${outfile}.tmp" "${outfile}" "${outfile}.tmp"*
 
@@ -450,6 +481,7 @@ finisher(){
 main() {
     step0_add_readgroup
     step1_mark_duplicates_spark
+    #step1_mark_duplicates_picard
     step2_mapping_quality_filter
     step3_bqsr
     step4_mosdepth
