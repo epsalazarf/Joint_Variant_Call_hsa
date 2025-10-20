@@ -176,6 +176,7 @@ step1_mark_duplicates_spark() {
         --spark-master local[${njobs}] \
         --remove-all-duplicates \
         --verbosity ERROR \
+        --output-shard-tmp-dir .$RANDOM.parts/ \
         --metrics-file "$metrics" \
         --output "${outfile}.tmp"
         #--conf "spark.executor.cores=${njobs}" \

@@ -32,14 +32,14 @@ submit_job() {
     jobid=$(sbatch --dependency=afterany:"$dependency" \
                    --job-name="${jobname}" \
                    --nodes=1 --ntasks=1 --cpus-per-task=4 \
-                   --mem=32G \
+                   --mem=4G \
                    --output=%x.%j.log \
                    --wrap "bash '$script' '${args[0]}' '${args[1]}' '${args[2]}'" \
             | awk '{print $4}')
   else
     jobid=$(sbatch --job-name="${jobname}" \
                    --nodes=1 --ntasks=1 --cpus-per-task=4 \
-                   --mem=32G \
+                   --mem=4G \
                    --output=%x.%j.log \
                    --wrap "bash '$script' '${args[0]}' '${args[1]}' '${args[2]}'" \
             | awk '{print $4}')
