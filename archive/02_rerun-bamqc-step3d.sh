@@ -6,14 +6,15 @@
 set -euo pipefail
 
 # === CONFIGURATION ===
-OUTPUT_PATH="${1:-$PWD}"   # path to processed BAM outputs
+bam_base=$1
+OUTPUT_PATH="${2:-$PWD}"   # path to processed BAM outputs
 
 
 # Detect environment
-if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
-    module load gatk
-    module load r
-fi
+# if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
+#     module load gatk
+#     module load r
+# fi
 
 # === FUNCTION ===
 step3_bqsr() {
@@ -24,6 +25,9 @@ step3_bqsr() {
 
     echo; echo ">>> Processing ${bam_base} <<<"
     echo "> Step 3d: Analyze Covariates"
+
+    echo $table
+    echo $table_recal
 
     # skip if already complete
     if [ -s "$output".pdf ]; then
@@ -44,7 +48,7 @@ step3_bqsr() {
         -after "$table_recal" \
         --verbosity ERROR \
         -csv "$output".csv \
-        -plots "$output".pdf 
+        -plots "$output".pdf
 }
 
 # === MAIN LOOP ===
