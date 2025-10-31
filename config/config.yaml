@@ -7,6 +7,6 @@ remote:
   modules: "gatk samtools mosdepth r/4.4.1"
 
 local:
-  ref_gnm: "$HOME/Data/REFx/GRCh38.p14/GRCh38.p14.fa"
-  ref_vars: "$HOME/Data/REFx/dbSNP157/dbSNP157.vcf.gz"
+  ref_gnm: "$HOME/Data/REFx/hg38.p14/hg38.fa.gz"
+  ref_vars: "$HOME/Data/REFx/dbSNP157/dbSNP157.canon_chr.vcf.gz"
   modules: ""
