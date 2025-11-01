@@ -2,7 +2,7 @@
 
 # Title: GATK HAPLOTYPE CALLER [FENIX]
 # About: Performs GATK HaplotypeCaller on a analysis-ready BAM file and subsets.
-# Usage: 03_gatk_variant_calling.sh [Mapped BAM] [OUTPUT PATH]
+# Usage: 03_gatk_haplotype_caller.sh [Mapped BAM] [OUTPUT PATH]
 # Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 
@@ -34,8 +34,8 @@ fi
 ##</INPUT>
 
 ##<ENVIROMENT>
-# Threads (no significant benefit when >4)
-njobs=4
+# Threads (no significant benefit when >2)
+njobs=2
 
 # Options
 SPLIT_VAR_TYPE=true
@@ -48,10 +48,11 @@ CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
     env_type="remote"
     echo "> Running on $env_type environment (SSH session detected)."
+    MEM="20G"
 else
     env_type="local"
-    njobs=8
     echo "> Running on $env_type environment (no SSH session detected)."
+    MEM="12G"
 fi
 
 # Parse config into Bash variables
@@ -73,6 +74,7 @@ eval "$(
 if [ $env_type == "remote" ] ; then
     echo "- Loading required modules "
     module load gatk
+    module load samtools
     module load bcftools
 fi 
 
@@ -109,7 +111,7 @@ step1_run_haplotype_caller() {
     [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
 
     #COMMAND
-    gatk HaplotypeCaller \
+    gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
             --input "$infile" \
             --reference "$ref_gnm" \
             --dbsnp "$ref_vars" \
