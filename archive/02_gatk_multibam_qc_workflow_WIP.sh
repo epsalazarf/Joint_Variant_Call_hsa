@@ -7,6 +7,11 @@
 # Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
 # Version notes: [+MULTIPLEX] Reworked steps 0 & 1 so it reads instead a list fo different BAM files and collapse them into Step 1 for a single concatenated file.
 
+# WARNING: SCRIPT NOT FUNCTIONAL. Due to improper sorting of input files, MarkDuplicateSpark 
+
+# TODO: Add "samtools sort -n" module
+# TODO: Add GATK SetNmMdAndUqTags module
+
 #<DEBUG>
 set -e
 
@@ -169,7 +174,7 @@ step0_add_readgroup_multi() {
     while IFS=$'\t' read -r rg_sample rg_bamfile rg_string; do
         local rg_outfile="${OUTPUT_PATH}/${rg_bamfile%.bam}.rg.bam"
         step0_add_readgroup "$rg_bamfile" "$rg_string" "$rg_outfile"
-        BAM_files_array+="$rg_outfile"
+        BAM_files_array+=(--input "$rg_outfile")
     done < "$BAM_LIST"
 
     echo " [DONE] $step_name"
@@ -181,7 +186,7 @@ step1_mark_duplicates_spark_multi() {
     local step_name="Step 1: Remove Duplicates (Spark)"
     local step_timestamp=$(date +%s)
     local outfile="${OUTPUT_PATH}/${BAM_sample}.merged.rmdup.bam"
-    local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
+    local metrics="${OUTPUT_PATH}/${BAM_sample}-dups.txt"
 
     echo;echo -e "> [BAMQC] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
@@ -194,7 +199,7 @@ step1_mark_duplicates_spark_multi() {
 
     #COMMAND
     gatk --java-options "-Xmx4G" MarkDuplicatesSpark \
-        --input "${BAM_files_array[@]}" \
+        "${BAM_files_array[@]}" \
         --spark-runner LOCAL \
         --spark-master local[${njobs}] \
         --remove-all-duplicates \
