@@ -1,10 +1,10 @@
 #!/bin/bash
 # Title: HAPCALL Batch Slurmer (sequential)
-# Usage: ./BAMQC.batch-slurmer 03_gatk_haplotype_caller.sh
+# Usage: ./BAMQC.batch-slurmer 03_gatk_haplotype_caller.sh [input directory]
 # Each line in batch list: sample_name    sample_file
 
 BATCH_SCRIPT="$(realpath $1)"
-DIR_PATH="$2"
+DIR_PATH="${2:-$PWD}"
 BAM_SUFFIX="*.rmdup.mqfilt.bqsr.bam"
 
 # CHECK: Script parameters
@@ -30,7 +30,7 @@ fi
 
 #PREPARATIONS: Find & Create BAM Files Table
 BATCH_LIST="$PWD/$(basename $PWD).hapcall_input_files.txt"
-find  . -name "*.rmdup.mqfilt.bqsr.bam" | awk 'BEGIN{FS="/";OFS="\t"}{print $(NF-1),$0}' > "$BATCH_LIST"
+find  . -name ${BAM_SUFFIX} | awk 'BEGIN{FS="/";OFS="\t"}{print $(NF-1),$0}' > "$BATCH_LIST"
 
 [[ -s "$BATCH_LIST" ]] && echo "[INFO] Batch list created: $BATCH_LIST"
 

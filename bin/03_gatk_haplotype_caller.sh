@@ -26,7 +26,7 @@ if [ -f "$BAM_FILE" ]; then
     BAM_name=$(basename $1)
     #BAM_base=${BAM_FILE%.*bam}
     BAM_prefix=${BAM_FILE%%.*bam}
-    FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_sort.g.vcf.gz"
+    FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
 else
     echo -e "<ERROR> GATK HAPLOTYPE CALLER cancelled. File not found: ${BAM_FILE}"
     exit 1
@@ -100,6 +100,7 @@ step1_run_haplotype_caller() {
     local step_name="Step 1: Haplotype Caller"
     local infile="$BAM_FILE"
     local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
+    local step_timestamp=$(date +%s)
 
     echo;echo -e ">> [VARCALL] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
@@ -123,6 +124,7 @@ step1_run_haplotype_caller() {
     #CHECK
     [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
     echo " [DONE] $step_name"
+    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
 step2_index_raw_gvcf() {
@@ -183,7 +185,7 @@ step3_extract_canon_chroms() {
 }
 
 step3x_sort_canon_chroms() {
-    local step_name="Optional Step 4: Sort Chromosomes GVCF"
+    local step_name="Step 3x: Sort Chromosomes GVCF (Optional)"
     local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
     local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_sort.g.vcf.gz"
 
@@ -207,6 +209,41 @@ step3x_sort_canon_chroms() {
         --output "${outfile}"
     
     set +o xtrace
+
+    #CHECK
+    [ -f "$outfile" ] && echo " [DONE] $step_name"
+}
+
+step4_split_chroms_gvcf() {
+    local step_name="Step 4: Split Chromosomes GVCFs"
+    local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
+    local outfile="${OUTPUT_PATH}/chrom_gvcf/${BAM_prefix}.raw_vars"
+
+    echo;echo -e ">> [VARCALL] $step_name >>"
+    echo "  &> $(date +%Y%m%d-%H%M)"
+
+    #GUARD
+    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+
+    echo "> Splitting ${infile}..."
+    echo "> Creating chrosomosome directory..."
+    mkdir -pv "${OUTPUT_PATH}/chrom_gvcf"
+    
+    #COMMAND
+    bcftools index -s "${infile}" \
+        | cut -f 1 \
+        | while read C; do
+            echo "Extracting chromosome $C..."
+            set -o xtrace
+            bcftools view "${infile}" \
+                --regions "${C}" \
+                --threads "$njobs" \
+                --write-index=tbi \
+                --output-type b \
+                --output "${outfile}".${C}.g.vcf.gz
+            set +o xtrace
+        done
+    
 
     #CHECK
     [ -f "$outfile" ] && echo " [DONE] $step_name"
@@ -253,6 +290,7 @@ main() {
     step2_index_raw_gvcf
     step3_extract_canon_chroms
     #step3x_sort_canon_chroms
+    step4_split_chroms_gvcf
     #housekeeping
     finisher
 }
