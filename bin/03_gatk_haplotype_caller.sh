@@ -219,34 +219,70 @@ step4_split_chroms_gvcf() {
     local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
     local outfile="${OUTPUT_PATH}/chrom_gvcf/${BAM_prefix}.raw_vars"
 
-    echo;echo -e ">> [VARCALL] $step_name >>"
+    echo
+    echo -e ">> [VARCALL] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
-    #GUARD
-    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+    # GUARD: fail early, fail loudly
+    if [[ ! -f "$infile" ]]; then
+        echo "<ERROR> Missing input: $infile" >&2
+        return 1
+    fi
+
+    mkdir -pv "$outdir" || {
+        echo "<ERROR> Cannot create output directory: $outdir" >&2
+        return 1
+    }
 
     echo "> Splitting ${infile}..."
+
+    local chroms
+    if ! chroms=$(bcftools index -s "$infile" | cut -f1); then
+        echo "<ERROR> Failed to extract chromosome list from index" >&2
+        return 1
+    fi
+
+    if [[ -z "$chroms" ]]; then
+        echo "<ERROR> No chromosomes found in $infile" >&2
+        return 1
+    fi
+
+    local count=0
+
     echo "> Creating chrosomosome directory..."
     mkdir -pv "${OUTPUT_PATH}/chrom_gvcf"
     
     #COMMAND
-    bcftools index -s "${infile}" \
-        | cut -f 1 \
-        | while read C; do
+    
+        while read -r C; do
+
+            [[ -z "$C" ]] && continue
+            
+            echo
             echo "Extracting chromosome $C..."
-            set -o xtrace
-            bcftools view "${infile}" \
-                --regions "${C}" \
+            
+            if ! bcftools view "$infile" \
+                --regions "$C" \
                 --threads "$njobs" \
                 --write-index=tbi \
                 --output-type b \
-                --output "${outfile}".${C}.g.vcf.gz
-            set +o xtrace
-        done
-    
+                --output "${outfile_prefix}.${C}.g.vcf.gz"
+            then
+                echo "<ERROR> bcftools view failed for chromosome: $C" >&2
+                return 1
+            fi
+
+            ((count++))
+
+        done < "$chroms"
+
+    if (( count == 0 )); then
+        echo "<ERROR> No chromosome files were produced" >&2
+        return 1
+    fi
 
     #CHECK
-    [ -f "$outfile" ] && echo " [DONE] $step_name"
+    echo " [DONE] $step_name ($count chromosomes)"
 }
 
 # HK Step: Remove intermediate files (optional)
@@ -268,13 +304,15 @@ housekeeping() {
 # Finisher: checks for final output and reports success and timing
 finisher() {
     if [ -f "$FINAL_FILE" ]; then
-        echo; echo -e "<SUCCESS> GATK HAPLOTYPE CALLER [FENIX] COMPLETED"
+        echo
+        echo -e "<SUCCESS> GATK HAPLOTYPE CALLER [FENIX] COMPLETED"
         echo -e "> Final output: ${FINAL_FILE}"
         echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 0
     else 
-        echo; echo -e "<ERROR> GATK HAPLOTYPE CALLER [FENIX] UNCOMPLETED. File not found: ${FINAL_FILE}"
+        echo
+        echo -e "<ERROR> GATK HAPLOTYPE CALLER [FENIX] UNCOMPLETED. File not found: ${FINAL_FILE}"
         echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
         echo "> Exiting..."
         exit 1
