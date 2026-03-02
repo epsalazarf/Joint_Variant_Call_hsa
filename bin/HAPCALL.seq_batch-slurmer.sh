@@ -30,9 +30,12 @@ fi
 
 #PREPARATIONS: Find & Create BAM Files Table
 BATCH_LIST="$PWD/$(basename $PWD).hapcall_input_files.txt"
-find  . -name ${BAM_SUFFIX} | awk 'BEGIN{FS="/";OFS="\t"}{print $(NF-1),$0}' > "$BATCH_LIST"
-
-[[ -s "$BATCH_LIST" ]] && echo "[INFO] Batch list created: $BATCH_LIST"
+if [ -s "$BATCH_LIST" ]; then
+  echo "[INFO] Reading files from pre-existing batch list: $BATCH_LIST"
+else
+  find  . -name ${BAM_SUFFIX} | awk 'BEGIN{FS="/";OFS="\t"}{print $(NF-1),$0}' > "$BATCH_LIST"
+  [[ -s "$BATCH_LIST" ]] && echo "[INFO] Creating batch list from found files: $BATCH_LIST"
+fi
 
 # Function to submit job with optional dependency
 submit_job() {
