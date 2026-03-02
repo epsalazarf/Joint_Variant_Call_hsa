@@ -10,23 +10,22 @@ The pipeline is organized into **three sequential steps**, each encapsulated in 
 ## Pipeline Overview
 
 1. **Step 01 — FASTQ Alignment** *(in development)*
-  
   - Input: raw FASTQ reads
   - Process: align reads to a reference genome (using `bwa mem`), produce raw BAM/CRAM files, generate alignment statistics.
   - Output: coordinate-sorted, indexed BAM files.
-2. **Step 02 — Mapped BAM QC (this script)**
-  
+
+2. **Step 02 — Mapped BAM QC (this script)**  
   - Input: mapped BAM from Step 01
   - Process: perform read group assignment, duplicate removal, mapping quality filtering, base quality recalibration, and coverage estimation.
   - Output: quality-controlled, analysis-ready BAM files.
-3. **Step 03 — Joint Variant Calling** *(in development)*
-  
+
+3. **Step 03 — GVCF generation** *(in testing)*  
   - Input: QC’d BAMs from Step 02
-  - Process: call SNPs/indels, generate GVCFs, perform joint genotyping, and filter variants.
-  - Output: multi-sample VCF/BCF ready for downstream analysis.
-4. **Wrapper Script** *(in development)*
-  
-  - Runs steps 01 → 03 in tandem, managing intermediate outputs and sanity checks.
+  - Process: call SNPs/indels, generate GVCFs, splits by chromosome.
+  - Output: single-sample VCF ready for merge with other samples.
+
+4. **Step 04 — Joint Variant Calling** *(in development)*
+  - Process: perform joint genotyping, and filter variants.
 
 ---
 
@@ -37,7 +36,7 @@ This module prepares mapped BAMs for downstream variant calling, ensuring high-q
 ### Usage
 
 ```bash
-gatk_mapped_bam_qc.sh [INPUT_BAM] [OUTPUT_PATH]
+02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH] [RG STRING]
 ```
 
 ### Input
@@ -46,8 +45,6 @@ gatk_mapped_bam_qc.sh [INPUT_BAM] [OUTPUT_PATH]
 - `OUTPUT_PATH` : destination folder for QC outputs (default: current working directory).
 
 ### Output
-
-The script produces:
 
 - `${BAM}.rg.bam` — BAM with read groups assigned
 - `${BAM}.rmdup.bam` — duplicate-removed BAM
@@ -74,7 +71,43 @@ The script produces:
   
 6. **Optional Metrics**  
   GATK `CollectAlignmentSummaryMetrics` and `CollectInsertSizeMetrics`.
-  
+
+---
+
+## Step 03: GATK4 HaplotypeCaller — Per-Sample GVCF Generation [FENIX]
+
+This module performs per-sample variant calling using GATK4 HaplotypeCaller in GVCF mode and prepares chromosome-level subsets for downstream joint genotyping.
+
+### Usage
+
+```bash
+03_gatk_haplotype_caller.sh [MAPPED_BAM] [OUTPUT_PATH]
+```
+
+### Input
+
+* `MAPPED_BAM` : Analysis-ready BAM file (BQSR-processed; output of Step 02).
+* `OUTPUT_PATH` : Destination directory for GVCF outputs (default: current working directory).
+* `config/config.yaml` : Environment-specific configuration file containing:
+  * `ref_gnm` — reference genome FASTA
+  * `ref_vars` — known variant sites (e.g., dbSNP)
+
+### Output
+
+* `${BAM}.raw_variants.g.vcf.gz` — raw per-sample GVCF
+* `${BAM}.raw_variants.canon_chr.g.vcf.gz` — canonical-chromosome GVCF (chr1–22, X, Y, M)
+* `chrom_gvcf/${BAM}.raw_vars.<CHR>.g.vcf.gz` — per-chromosome GVCFs
+
+### Processing Steps
+
+1. **HaplotypeCaller (GVCF mode)**
+   Produces a single-sample GVCF suitable for joint genotyping.
+
+2. **Extract Canonical Chromosomes**
+   Subsets to: chr1–chr22, chrX, chrY, chrM using `bcftools view`, producing a cleaned GVCF focused on primary chromosomes.
+
+3. **Split by Chromosome**
+   Automatically detects chromosomes from the GVCF index and generates one GVCF per chromosome inside a subfolder.
 
 ---
 
@@ -95,24 +128,6 @@ Reference data required (configured via `config/config.yaml`):
 
 ---
 
-## Example Workflow
-
-```bash
-# Step 01 - Align FASTQs (placeholder)
-bash align_fastq_reads.sh sample_R1.fastq.gz sample_R2.fastq.gz ./results/align/
-
-# Step 02 - QC mapped BAM
-bash gatk_mapped_bam_qc.sh ./results/align/sample.bam ./results/qc/
-
-# Step 03 - Joint variant calling (placeholder)
-bash joint_variant_calling.sh ./results/qc/ ./results/variants/
-
-# Wrapper - Full pipeline run
-bash run_joint_calling_pipeline.sh sample_config.yaml
-```
-
----
-
 ## Development Notes
 
 - **Consistency:** Each script follows the same input-output convention and sanity checks.
@@ -123,5 +138,5 @@ bash run_joint_calling_pipeline.sh sample_config.yaml
 
 ## Authors
 
-- Pavel Salazar-Fernandez (current maintainer): epsalazarf@gmial.com
+- Pavel Salazar-Fernandez (current maintainer): epsalazarf@gmail.com
 - Dr. Federico Sanchez-Quinto (project leader)
