@@ -31,6 +31,7 @@ else
     echo -e "<ERROR> GATK HAPLOTYPE CALLER cancelled. File not found: ${BAM_FILE}"
     exit 1
 fi
+
 ##</INPUT>
 
 ##<ENVIROMENT>
@@ -223,16 +224,16 @@ step4_split_chroms_gvcf() {
     echo -e ">> [VARCALL] $step_name >>"
     echo "  &> $(date +%Y%m%d-%H%M)"
 
-    # GUARD: fail early, fail loudly
+    # GUARD
     if [[ ! -f "$infile" ]]; then
         echo "<ERROR> Missing input: $infile" >&2
         return 1
     fi
 
-    mkdir -pv "$outdir" || {
-        echo "<ERROR> Cannot create output directory: $outdir" >&2
-        return 1
-    }
+    # mkdir -pv "$outdir" || {
+    #     echo "<ERROR> Cannot create output directory: $outdir" >&2
+    #     return 1
+    # }
 
     echo "> Splitting ${infile}..."
 
