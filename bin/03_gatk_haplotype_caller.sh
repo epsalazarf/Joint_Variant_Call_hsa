@@ -218,7 +218,8 @@ step3x_sort_canon_chroms() {
 step4_split_chroms_gvcf() {
     local step_name="Step 4: Split Chromosomes GVCFs"
     local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
-    local outfile="${OUTPUT_PATH}/chrom_gvcf/${BAM_prefix}.raw_vars"
+    local outdir="${OUTPUT_PATH}/chrom_gvcf"
+    local outfile="${outdir}/${BAM_prefix}.raw_vars"
 
     echo
     echo -e ">> [VARCALL] $step_name >>"
@@ -230,11 +231,13 @@ step4_split_chroms_gvcf() {
         return 1
     fi
 
-    # mkdir -pv "$outdir" || {
-    #     echo "<ERROR> Cannot create output directory: $outdir" >&2
-    #     return 1
-    # }
+    echo "> Creating chrosomosome directory..."
+    mkdir -pv $outdir || {
+        echo "<ERROR> Cannot create output directory: $outdir" >&2
+        return 1
+    }
 
+    #COMMAND
     echo "> Splitting ${infile}..."
 
     local chroms
@@ -249,33 +252,27 @@ step4_split_chroms_gvcf() {
     fi
 
     local count=0
+    while read -r C; do
 
-    echo "> Creating chrosomosome directory..."
-    mkdir -pv "${OUTPUT_PATH}/chrom_gvcf"
-    
-    #COMMAND
-    
-        while read -r C; do
+        [[ -z "$C" ]] && continue
 
-            [[ -z "$C" ]] && continue
-            
-            echo
-            echo "Extracting chromosome $C..."
-            
-            if ! bcftools view "$infile" \
-                --regions "$C" \
-                --threads "$njobs" \
-                --write-index=tbi \
-                --output-type b \
-                --output "${outfile_prefix}.${C}.g.vcf.gz"
-            then
-                echo "<ERROR> bcftools view failed for chromosome: $C" >&2
-                return 1
-            fi
+        echo
+        echo "Extracting chromosome $C..."
 
-            ((count++))
+        if ! bcftools view "$infile" \
+            --regions "$C" \
+            --threads "$njobs" \
+            --write-index=tbi \
+            --output-type z \
+            --output "${outfile}.${C}.g.vcf.gz"
+        then
+            echo "<ERROR> bcftools view failed for chromosome: $C" >&2
+            return 1
+        fi
 
-        done < "$chroms"
+        ((count++))
+
+    done <<< "$chroms"
 
     if (( count == 0 )); then
         echo "<ERROR> No chromosome files were produced" >&2
