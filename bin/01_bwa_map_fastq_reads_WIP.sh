@@ -1,276 +1,367 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Title: BWA FASTQ READS MAPPER [FENIX]
-# About: Maps FASTQ read files to Reference Genomes to produce mapped BAMs. Adapted for running on LAVIS-FENIX.
-# Usage: 01_bwa_map_fastq_reads.sh [SAMPLE PREFIX] [OUTPUT PATH]
-# Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
-# Source 1: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
-# Source 2: https://gatk.broadinstitute.org/hc/en-us/articles/360035889471-How-should-I-pre-process-data-from-multiplexed-sequencing-and-multi-library-designs
+# =============================================================================
+# Title       : BWA FASTQ Reads Mapper [FENIX]
+# Description : Maps FASTQ reads to a reference genome to produce mapped BAMs. Adapted for LAVIS-FENIX.
+# Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
+# Institution : LIIGH (UNAM-J)
+# Date        : 2026-03-24
+# Version     : WIP
+# Usage       : 01_bwa_map_fastq_reads_WIP.sh [input_dir] [output_path]
+# Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
+#             : https://gatk.broadinstitute.org/hc/en-us/articles/360035889471
+# =============================================================================
 
+set -euo pipefail
 
-#<DEBUG>
-set -e
+# <ARGUMENTS> -----------------------------------------------------------------
 
-#<START>
-echo;echo -e "<START> BWA FASTQ READS MAPPER [FENIX]"
-echo "Started: $(date)"
+INPUT_DIR="${1:-$PWD}"
+OUTPUT_PATH="${2:-$PWD}"
+
+# <\ARGS> ---------------------------------------------------------------------
+
+# <ENVIRONMENT> ---------------------------------------------------------------
+
+echo
+echo "[$] BWA FASTQ Reads Mapper [FENIX] >>"
+echo "[&]  Started: $(date)"
 script_timestamp=$(date +%s)
 
-##<INPUT>
-echo;echo -e "> SETUP: Check Input Files >>"
-INPUT_DIR=${1:-$PWD}
 SAMPLE_NAME=$(basename "$INPUT_DIR")
-OUTPUT_PATH=${2:-$PWD}
 
+echo
+echo "[i]  Checking input files..."
 
-#GUARD
-if ls ./${SAMPLE_NAME}*.fq.gz > /dev/null 2>&1; then
-    echo "> Input directory: ${INPUT_DIR}"
-    echo "> Sample name: ${SAMPLE_NAME}"
-    echo "> Output folder: ${OUTPUT_PATH}"
+if find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -q .; then
+  echo "[<]  ${INPUT_DIR}"
+  echo "[i]  Sample : ${SAMPLE_NAME}"
+  echo "[i]  Output : ${OUTPUT_PATH}"
 else
-    echo -e "<ERROR> BWA FASTQ READS MAPPER cancelled. FASTA Files starting with ${SAMPLE_NAME}* not found."
-    exit 1
+  echo "[X]  CANCELLED. FASTQ files starting with ${SAMPLE_NAME}* not found."
+  exit 1
 fi
-##</INPUT>
-
-##<ENVIROMENT>
-# Threads (no significant benefit when >4)
-njobs=4
 
 # Options
+njobs=4
 RUN_FASTQC=false
+BUILD_RG=false
 
-# Path to config file (relative to repo root)
+# Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 
 # Detect environment
-if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
-    env_type="remote"
-    echo "> Running on $env_type environment (SSH session detected)."
+if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
+  env_type="remote"
 else
-    env_type="local"
-    njobs=8
-    echo "> Running on $env_type environment (no SSH session detected)."
+  env_type="local"
+  njobs=8
 fi
 
-# Parse config into Bash variables
+echo "[i]  Environment: $env_type"
+
+# Parse YAML config into Bash variables
 eval "$(
-    awk -v env="$env_type" '
-        BEGIN { in_env=0 }
-        $1 ~ env":" { in_env=1; next }
-        in_env && /^[^[:space:]]/ { in_env=0 }
-        in_env && /^[[:space:]]+[a-zA-Z0-9_]+:/ {
-            gsub(":", "=", $1)
-            sub(/^[[:space:]]+/, "", $1)
-            gsub(/^"/, "", $2); gsub(/"$/, "", $2)
-            print $1 $2
-        }
-    ' "$CONFIG_FILE"
+  awk -v env="$env_type" '
+    BEGIN { in_env=0 }
+    $1 ~ env":" { in_env=1; next }
+    in_env && /^[^[:space:]]/ { in_env=0 }
+    in_env && /^[[:space:]]+[a-zA-Z0-9_]+:/ {
+      gsub(":", "=", $1)
+      sub(/^[[:space:]]+/, "", $1)
+      gsub(/^"/, "", $2); gsub(/"$/, "", $2)
+      print $1 $2
+    }
+  ' "$CONFIG_FILE"
 )"
 
-# Load modules if run on remote server (work-around due to faulty  parser [ARC02])
-if [ $env_type == "remote" ] ; then
-    echo "- Loading required modules "
-    module load fastqc
-    module load bwa
-    module load samtools
-fi 
-
-#GUARD: Reference files paths
-if [ -z "$ref_gnm" ] ; then
-    echo "<ERROR> Missing required reference paths. Please check your config file: $CONFIG_FILE"
-    exit 1
+# Load modules on remote (work-around due to faulty parser [ARC02])
+if [[ "$env_type" == "remote" ]]; then
+  echo "[i]  Loading modules..."
+  module load fastqc
+  module load bwa
+  module load samtools
 fi
 
-#GUARD: Reference files availability
-echo "> References used: "
-[ -f "${ref_gnm}" ] || ( echo " ERROR: Reference Genome not found (${ref_gnm})." ; exit 1 )
-echo "  - Genome: ${ref_gnm}"
+# Guard: reference file paths
+if [ -z "$ref_gnm" ]; then
+  echo "[X]  Missing required reference paths. Check config: $CONFIG_FILE"
+  exit 1
+fi
 
-#</ENVIROMENT>
+# Guard: reference file availability
+echo "[i]  References:"
+[ -f "${ref_gnm}" ] || { echo "[X]  Reference genome not found: ${ref_gnm}"; exit 1; }
+echo "[i]    Genome  : ${ref_gnm}"
 
-#<FUNCTIONS>
+# <\ENV> ----------------------------------------------------------------------
 
-# MAP STEP 0: Find input files
+# <FUNCTIONS> -----------------------------------------------------------------
+
+## Step 0: Find and map input files per read group
 step0_map_reads_per_sample() {
-    local step_name="Step 0: Map input files"
-    local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
-    local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
+  local step_name="Step 0: Map Input Files"
 
-    echo;echo -e ">> [BWAMAP] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    barcode=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -nE 's/.*_([a-zA-Z0-9]+)-.*f.*q.gz/\1/' | sort -u)
-    read_groups=$(find . -name "${SAMPLE_NAME}*.f*q.gz"  | sed -nE 's/.*-1A_(.*)_(L[0-9]+)_.*f.*q.gz/\1_\2/' | sort -u)
+  # Find R1 files: any sample file ending in _[R]1.f*q.gz (R0/index reads are naturally excluded)
+  # R2 is derived by replacing the trailing 1 with 2 (preserving the optional R prefix)
+  local r1_files r1_count
+  r1_files=$(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" \
+    | grep -E '_R?1\.f[^.]*q\.gz$' | sort)
+  r1_count=$(echo "$r1_files" | wc -l | tr -d ' ')
 
-    #GUARD
-    [ -z "$read_groups" ] && { echo "<ERROR> No files found with pattern: ${SAMPLE_NAME}*_1.f.*q.gz"; exit 1; }
+  [ -z "$r1_files" ] && { echo "[X]  No R1 files found for: ${SAMPLE_NAME}"; exit 1; }
 
-    echo "  Read groups found:" 
-    for rg in $read_groups; do
-        echo "  > ${rg}:"
-        R1=$(find . -name "${SAMPLE_NAME}*_${rg}_1.f*q.gz")
-        echo "  $R1"
-        R2=$(find . -name "${SAMPLE_NAME}*_${rg}_2.f*q.gz")
-        echo "  $R2"
+  echo "[i]  Pairs found: $r1_count"
+  read_groups=""
 
-        rgSM="$SAMPLE_NAME"
-        rgID="${rg/_/.}"
-        rgLB="$barcode"
-        rgPU="${rgID}.${rgLB}"
-        rgPL="ILLUMINA"
+  if [ "$r1_count" -eq 1 ]; then
+    # Single pair — no read group key; BAM will be named ${SAMPLE_NAME}.bam
+    local R1 R2
+    R1="$r1_files"
+    R2=$(echo "$R1" | sed -E 's/1(\.f[^.]*q\.gz)$/2\1/')
+    [ -f "$R2" ] || { echo "[X]  R2 not found: $R2"; exit 1; }
+    echo "[i]    R1: $R1"
+    echo "[i]    R2: $R2"
+    printf "%s\n%s\n" "$R1" "$R2" > "${OUTPUT_PATH}/${SAMPLE_NAME}_bwa_inputs.txt"
+    echo "[>]  ${OUTPUT_PATH}/${SAMPLE_NAME}_bwa_inputs.txt"
+  else
+    # Multiple pairs — extract PLATE_LANE as read group key; BAM named ${SAMPLE_NAME}_${rg}.bam
+    while IFS= read -r R1; do
+      local R2 base rg
+      R2=$(echo "$R1" | sed -E 's/1(\.f[^.]*q\.gz)$/2\1/')
+      [ -f "$R2" ] || { echo "[X]  R2 not found: $R2"; exit 1; }
 
-        echo -n "@RG\tID:${rgID}\tPL:${rgPL}\tPU:${rgPU}\tLB:${rgLB}\tSM:${rgSM}" > "${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
-        echo -e "\n$R1\n$R2" >> "${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+      base=$(basename "$R1")
+      base="${base#"${SAMPLE_NAME}_"}"
+      rg=$(echo "$base" | sed -E 's/[A-Za-z0-9]*-1A_//; s/_?R?1\.f[^.]*q\.gz$//')
 
-    done
-    echo;echo " [DONE] $step_name"
+      read_groups="${read_groups:+$read_groups }$rg"
+      echo "[i]    ${rg}:"
+      echo "[i]      R1: $R1"
+      echo "[i]      R2: $R2"
+
+      printf "%s\n%s\n" "$R1" "$R2" > "${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+      echo "[>]  ${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+    done <<< "$r1_files"
+  fi
+
+  echo "[!]  $step_name"
 }
 
-# MAP STEP 1: Check Quality
+## Step 0b: Annotate Read Groups (optional, BUILD_RG=false)
+step0b_annotate_read_groups() {
+  local step_name="Step 0b: Annotate Read Groups"
+
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
+
+  [ -n "$read_groups" ] || { echo "[i]  Skipped (single pair — @RG not needed)"; return 0; }
+  [ "$BUILD_RG" = true ] || { echo "[i]  Skipped (BUILD_RG=false)"; return 0; }
+
+  echo "[i]  Prepending @RG string to inputs files..."
+
+  for rg in $read_groups; do
+    local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+    [ -f "$infile" ] || { echo "[X]  Missing inputs file: $infile"; exit 1; }
+
+    # Read R1 path from inputs file and extract barcode from filename
+    local r1 r2 barcode rgID rg_line
+    { read -r r1; read -r r2; } < "$infile"
+    barcode=$(basename "$r1" | sed -nE 's/.*_([A-Za-z0-9]+)-1A_.*/\1/p')
+    barcode="${barcode:-$SAMPLE_NAME}"
+    rgID="${rg/_/.}"
+
+    rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s.%s\tLB:%s\tSM:%s" \
+      "$rgID" "$rgID" "$barcode" "$barcode" "$SAMPLE_NAME")
+
+    { echo "$rg_line"; echo "$r1"; echo "$r2"; } > "${infile}.tmp"
+    mv "${infile}.tmp" "$infile"
+    echo "[>]  $infile"
+  done
+
+  echo "[!]  $step_name"
+}
+
+## Step 1: Check Reads Quality (FastQC)
 step1_reads_quality() {
-    local step_name="Step 1: Check Reads Quality"
-    local outdir="${OUTPUT_PATH}/${SAMPLE_NAME}-fastqc/"
+  local step_name="Step 1: Check Reads Quality"
+  local outdir="${OUTPUT_PATH}/${SAMPLE_NAME}-fastqc/"
 
-    echo;echo -e ">> [BWAMAP] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    #TOGGLE
-    [ "$RUN_FASTQC" =  true ] || { echo " [SKIP] $step_name disabled by user toggle"; return 0; }
-    
-    mkdir -p "$outdir"
-    echo "> Folder created: ${outdir}"
+  [ "$RUN_FASTQC" = true ] || { echo "[i]  Skipped (RUN_FASTQC=false)"; return 0; }
 
-    #COMMAND
-    echo " [!] Running: fastqc for all $SAMPLE_NAME reads."
-    fastqc \
-        --outdir "$outdir" \
-        --threads  "$njobs" \
-        --noextract \
-        --quiet  \
-        $(find . -name "${SAMPLE_NAME}*.f*q.gz")
+  mkdir -p "$outdir"
+  echo "[i]  Output folder: ${outdir}"
 
-    echo " [DONE] $step_name"
+  echo "[&]  Running FastQC for all $SAMPLE_NAME reads..."
+  fastqc \
+    --outdir "$outdir" \
+    --threads "$njobs" \
+    --noextract \
+    --quiet \
+    $(find . -name "${SAMPLE_NAME}*.f*q.gz")
+
+  echo "[>]  $outdir"
+  echo "[!]  $step_name"
 }
 
-# QC STEP 2: Map Reads to Reference
+## Step 2: BWA Mapping to Reference (per read group)
 step2_bwa_mapping_per_readgroup() {
-    local step_name="Step 2: BWA Mapping to Reference"
+  local step_name="Step 2: BWA Mapping to Reference [Iterative]"
 
-    echo;echo -e "> [BWAMAP] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    for rg in $read_groups; do
-        echo;echo "> Processing: $SAMPLE_NAME [$rg]..."
-        local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
-        local outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
+  local items
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
 
-        #GUARD
-        [ -f "$infile" ] || ( echo "<ERROR> Missing input: $infile" ; exit 1 )
-
-        # Inputs array
-        local inputs_array=()
-        while IFS= read -r line; do
-            inputs_array+=( "$line" )
-        done < "${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
-
-        #SKIP
-        [ -f "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; continue ;}
-
-        echo "> Mapping reads to create: ${outfile}"
-        
-        set -o xtrace
-        #COMMAND
-        bwa mem \
-            -t "$njobs" \
-            -R "${inputs_array[0]}" \
-            -v 0 \
-            "$ref_gnm" \
-            "${inputs_array[1]}" \
-            "${inputs_array[2]}" |
-        samtools view \
-            --threads "$njobs" \
-            --fai-reference "$ref_gnm".fai \
-            --bam \
-            --output "${outfile}.tmp" -
-        set +o xtrace
-        
-        #DETEMP
-        mv "${outfile}.tmp" "$outfile"
-        
-        #CHECK
-        [ -s "$outfile" ] || ( echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile" ; exit 1 )
-
-        echo "> Job finished: ${outfile}"
-    
-    done
-
-
-    echo;echo " [DONE] $step_name"
-}
-
-step4_sort_mapped_bams() {
-    #NOTE: placeholder, not tested
-    local step_name="Step 4: sort and index BAM files"
-
-    echo; echo -e "> [BWAMAP] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
-    
-    #COMMAND
-    for rg in $read_groups; do
-        local infile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
-        local outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired-sort.bam"
-        
-        #SKIP
-        [ -f "$outfile" ] && { echo " [!] $step_name already sorted ($outfile exists). Skipping."; continue ;}
-        
-        echo; echo "> Sorting and indexing: ${SAMPLE_NAME}.${rg}.paired.bam"
-        set -o xtrace
-        samtools sort "$infile" -O bam -o "$outfile".tmp -@ "$njobs"
-
-        #DETEMP
-        mv "${outfile}.tmp" "$outfile"
-
-        samtools index "$outfile" -@ "$njobs"
-        set +o xtrace
-
-        echo "> Job finished: ${outfile}"
-    done
-}
-
-# Finisher: checks for final output and reports success and timing
-finisher() {
-    if [ -f "${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam" ]; then
-        echo; echo -e "<SUCCESS> GATK4 BAM QC [FENIX] COMPLETED"
-        echo -e "> Last output(s): ${OUTPUT_PATH}/${SAMPLE_NAME}.${rg}.paired.bam"
-        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
-        echo "> Exiting..."
-        exit 0
-    else 
-        echo; echo -e "<ERROR> GATK4 BAM QC [FENIX] UNCOMPLETED. File not found: ${SAMPLE_NAME}.${rg}.paired.bam"
-        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
-        echo "> Exiting..."
-        exit 1
+  for rg in "${items[@]}"; do
+    echo
+    echo "[&]  Processing: $SAMPLE_NAME${rg:+ [$rg]}..."
+    local infile outfile
+    if [ -z "$rg" ]; then
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}_bwa_inputs.txt"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.bam"
+    else
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.bam"
     fi
+
+    [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+
+    # Inputs array: optional @RG line, then R1, R2
+    local inputs_array=()
+    while IFS= read -r line; do
+      inputs_array+=( "$line" )
+    done < "$infile"
+
+    local bwa_rg_args=() r1 r2
+    if [[ "${inputs_array[0]}" == @RG* ]]; then
+      bwa_rg_args=(-R "${inputs_array[0]}")
+      r1="${inputs_array[1]}"
+      r2="${inputs_array[2]}"
+    else
+      r1="${inputs_array[0]}"
+      r2="${inputs_array[1]}"
+    fi
+
+    [ -f "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; continue; }
+
+    echo "[&]  Mapping reads to: ${outfile}"
+
+    set -o xtrace
+    bwa mem \
+      -t "$njobs" \
+      "${bwa_rg_args[@]}" \
+      -v 0 \
+      "$ref_gnm" \
+      "$r1" "$r2" |
+    samtools view \
+      --threads "$njobs" \
+      --fai-reference "$ref_gnm".fai \
+      --bam \
+      --output "${outfile}.tmp" -
+    set +o xtrace
+
+    mv "${outfile}.tmp" "$outfile"
+
+    [ -s "$outfile" ] || { echo "[X]  CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
+    echo "[>]  $outfile"
+  done
+
+  echo "[!]  $step_name"
 }
 
-#</FUNCTIONS>
+## Step 4: Sort and Index BAM files
+step3_sort_mapped_bams() {
+  local step_name="Step 3: Sort and Index BAM Files"
 
-#<MAIN>
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
+
+  local items
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
+
+  for rg in "${items[@]}"; do
+    local infile outfile
+    if [ -z "$rg" ]; then
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}.bam"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.bam"
+    else
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.bam"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.bam"
+    fi
+
+    [ -f "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; continue; }
+
+    echo "[&]  Sorting and indexing: $(basename "$infile")"
+    set -o xtrace
+    samtools sort "$infile" -O bam -o "${outfile}.tmp" -@ "$njobs"
+
+    mv "${outfile}.tmp" "$outfile"
+
+    samtools index "$outfile" -@ "$njobs"
+    set +o xtrace
+
+    echo "[>]  $outfile"
+  done
+
+  echo "[!]  $step_name"
+}
+
+## Finisher: check final output and report
+finisher() {
+  local items all_ok=true
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
+
+  echo
+  for rg in "${items[@]}"; do
+    local bam
+    [ -z "$rg" ] && bam="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.bam" \
+                 || bam="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.bam"
+    if [ -f "$bam" ]; then
+      echo "[>]  $bam"
+    else
+      echo "[X]  INCOMPLETE. Output not found: $bam"
+      all_ok=false
+    fi
+  done
+
+  echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+
+  if [ "$all_ok" = true ]; then
+    echo "[$] BWA FASTQ Reads Mapper [FENIX] completed successfully!"
+    exit 0
+  else
+    exit 1
+  fi
+}
+
+# <\FUNCTIONS> ----------------------------------------------------------------
+
+# <MAIN> ----------------------------------------------------------------------
+
 main() {
-    step0_map_reads_per_sample
-    step1_reads_quality
-    step2_bwa_mapping_per_readgroup
-    #step2a_bwa_mapping_per_sample
-    #step3_merge_sample_bams
-    #step4_sort_mapped_bams
-    finisher
+  step0_map_reads_per_sample
+  step0b_annotate_read_groups
+  step1_reads_quality
+  step2_bwa_mapping_per_readgroup
+  step3_sort_mapped_bams
+  finisher
 }
 
 main "$@"
-#</MAIN>
 
-#<MISC>
+# <\MAIN> ---------------------------------------------------------------------
 
-#<END>
+#EOF

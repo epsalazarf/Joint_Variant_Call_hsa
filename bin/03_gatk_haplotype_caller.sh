@@ -1,337 +1,293 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Title: GATK HAPLOTYPE CALLER [FENIX]
-# About: Performs GATK HaplotypeCaller on a analysis-ready BAM file and subsets.
-# Usage: 03_gatk_haplotype_caller.sh [Mapped BAM] [OUTPUT PATH]
-# Authors: Pavel Salazar-Fernandez (this version), AH, EA, FASQ, MCAA
-# Source: GATK4 best practices workflow - https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
+# =============================================================================
+# Title       : GATK HaplotypeCaller [FENIX]
+# Description : Per-sample GVCF generation and chromosome splitting. Adapted for LAVIS-FENIX.
+# Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
+# Institution : LIIGH (UNAM-J)
+# Date        : 2026-03-24
+# Version     : 1.1
+# Usage       : 03_gatk_haplotype_caller.sh <bqsr.bam> [output_path]
+# Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
+# =============================================================================
 
-#<DEBUG>
-set -e
+set -euo pipefail
 
-#<START>
-echo;echo -e "<START> GATK HAPLOTYPE CALLER [FENIX]"
-echo "Started: $(date)"
+# <ARGUMENTS> -----------------------------------------------------------------
+
+BAM_FILE="${1:?Usage: $(basename "$0") <bqsr.bam> [output_path]}"
+OUTPUT_PATH="${2:-$PWD}"
+
+# <\ARGS> ---------------------------------------------------------------------
+
+# <ENVIRONMENT> ---------------------------------------------------------------
+
+echo
+echo "[$] GATK HaplotypeCaller [FENIX] >>"
+echo "[&]  Started: $(date)"
 script_timestamp=$(date +%s)
 
-##<INPUT>
-echo;echo -e "> SETUP: Check Input Files >>"
-BAM_FILE=$1
-OUTPUT_PATH=${2:-$PWD}
+echo
+echo "[i]  Checking input files..."
 
-#GUARD
 if [ -f "$BAM_FILE" ]; then
-    echo "> Input file: $BAM_FILE"
-    echo "> Output folder: ${OUTPUT_PATH}"
-    BAM_name=$(basename $1)
-    #BAM_base=${BAM_FILE%.*bam}
-    BAM_prefix=${BAM_FILE%%.*bam}
-    FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
+  echo "[<]  $BAM_FILE"
+  echo "[i]  Output: ${OUTPUT_PATH}"
+  BAM_name=$(basename "$BAM_FILE")
+  BAM_prefix=${BAM_FILE%%.*bam}
+  FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
 else
-    echo -e "<ERROR> GATK HAPLOTYPE CALLER cancelled. File not found: ${BAM_FILE}"
-    exit 1
+  echo "[X]  CANCELLED. File not found: ${BAM_FILE}"
+  exit 1
 fi
 
-##</INPUT>
-
-##<ENVIROMENT>
-# Threads (no significant benefit when >2)
-njobs=2
-
 # Options
+njobs=2
 SPLIT_VAR_TYPE=true
 HOUSEKEEP=false
 
-# Path to config file (relative to repo root)
+# Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 
 # Detect environment
-if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ] || [ -n "$SSH_CONNECTION" ]; then
-    env_type="remote"
-    echo "> Running on $env_type environment (SSH session detected)."
-    MEM="20G"
+if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
+  env_type="remote"
+  MEM="20G"
 else
-    env_type="local"
-    echo "> Running on $env_type environment (no SSH session detected)."
-    MEM="12G"
+  env_type="local"
+  MEM="12G"
 fi
 
-# Parse config into Bash variables
+echo "[i]  Environment: $env_type"
+
+# Parse YAML config into Bash variables
 eval "$(
-    awk -v env="$env_type" '
-        BEGIN { in_env=0 }
-        $1 ~ env":" { in_env=1; next }
-        in_env && /^[^[:space:]]/ { in_env=0 }
-        in_env && /^[[:space:]]+[a-zA-Z0-9_]+:/ {
-            gsub(":", "=", $1)
-            sub(/^[[:space:]]+/, "", $1)
-            gsub(/^"/, "", $2); gsub(/"$/, "", $2)
-            print $1 $2
-        }
-    ' "$CONFIG_FILE"
+  awk -v env="$env_type" '
+    BEGIN { in_env=0 }
+    $1 ~ env":" { in_env=1; next }
+    in_env && /^[^[:space:]]/ { in_env=0 }
+    in_env && /^[[:space:]]+[a-zA-Z0-9_]+:/ {
+      gsub(":", "=", $1)
+      sub(/^[[:space:]]+/, "", $1)
+      gsub(/^"/, "", $2); gsub(/"$/, "", $2)
+      print $1 $2
+    }
+  ' "$CONFIG_FILE"
 )"
 
-# Load modules if run on remote server (work-around due to faulty  parser [ARC02])
-if [ $env_type == "remote" ] ; then
-    echo "- Loading required modules "
-    module load gatk
-    module load samtools
-    module load bcftools
-fi 
-
-#GUARD: Reference files paths
-if [ -z "$ref_gnm" ] || [ -z "$ref_vars" ]; then
-    echo "<ERROR> Missing required reference paths. Please check your config file: $CONFIG_FILE"
-    exit 1
+# Load modules on remote (work-around due to faulty parser [ARC02])
+if [[ "$env_type" == "remote" ]]; then
+  echo "[i]  Loading modules..."
+  module load gatk
+  module load samtools
+  module load bcftools
 fi
 
-#GUARD: Reference files availability
-echo "> References used: "
-[ -f "${ref_gnm}" ] || ( echo " ERROR: Reference Genome not found (${ref_gnm})." ; exit 1 )
-echo "  - Genome: ${ref_gnm}"
-[ -f "${ref_vars}" ] || { echo " ERROR: Reference Variants not found (${ref_vars})."; exit 1; }
-echo "  - Variants: ${ref_vars}" 
+# Guard: reference file paths
+if [ -z "$ref_gnm" ] || [ -z "$ref_vars" ]; then
+  echo "[X]  Missing required reference paths. Check config: $CONFIG_FILE"
+  exit 1
+fi
 
-#</ENVIROMENT>
+# Guard: reference file availability
+echo "[i]  References:"
+[ -f "${ref_gnm}" ]  || { echo "[X]  Reference genome not found: ${ref_gnm}"; exit 1; }
+echo "[i]    Genome  : ${ref_gnm}"
+[ -f "${ref_vars}" ] || { echo "[X]  Reference variants not found: ${ref_vars}"; exit 1; }
+echo "[i]    Variants: ${ref_vars}"
 
-#<FUNCTIONS>
+# <\ENV> ----------------------------------------------------------------------
 
-# VARCALL STEP 1: Haplotype Caller
+# <FUNCTIONS> -----------------------------------------------------------------
+
+## Step 1: HaplotypeCaller (GVCF mode)
 step1_run_haplotype_caller() {
-    local step_name="Step 1: Haplotype Caller"
-    local infile="$BAM_FILE"
-    local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
-    local step_timestamp=$(date +%s)
+  local step_name="Step 1: HaplotypeCaller"
+  local infile="$BAM_FILE"
+  local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
+  local step_timestamp=$(date +%s)
 
-    echo;echo -e ">> [VARCALL] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    #GUARD
-    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
-    #SKIP
-    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
+  gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
+    --input "$infile" \
+    --reference "$ref_gnm" \
+    --dbsnp "$ref_vars" \
+    --emit-ref-confidence GVCF \
+    --verbosity ERROR \
+    --create-output-variant-index \
+    --output "${outfile}"
 
-    #COMMAND
-    gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
-            --input "$infile" \
-            --reference "$ref_gnm" \
-            --dbsnp "$ref_vars" \
-            --emit-ref-confidence GVCF \
-            --verbosity ERROR \
-            --create-output-variant-index \
-            --output "${outfile}"
-
-    #CHECK
-    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
-    echo " [DONE] $step_name"
-    echo "  &> Step Time: $( echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+  [ -s "$outfile" ] || { echo "[X]  CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
+  echo "[>]  $outfile"
+  echo "[!]  $step_name"
+  echo "[&]  Step time: $(echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
+## Step 2: Index Raw GVCF
 step2_index_raw_gvcf() {
-    local step_name="Step 2: Index GVCF (tbi)"
-    local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
-    local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz.tbi"
+  local step_name="Step 2: Index GVCF (tbi)"
+  local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
+  local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz.tbi"
 
-    echo;echo -e ">> [VARCALL] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    #GUARD
-    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
-    #SKIP
-    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
-    
-    #COMMAND 1: Indexing
-    bcftools index "$infile" \
-        --tbi \
-        --threads "$njobs" \
-        --force
+  bcftools index "$infile" \
+    --tbi \
+    --threads "$njobs" \
+    --force
 
-    #CHECK
-    [ -s "$outfile" ] && echo " [DONE] $step_name"
+  [ -s "$outfile" ] && { echo "[>]  $outfile"; echo "[!]  $step_name"; }
 }
 
-# QC STEP 3: CANONICAL CHROMOSOMES (1-23, X, Y, MT)
+## Step 3: Extract Canonical Chromosomes (chr1-22, X, Y, M)
 step3_extract_canon_chroms() {
-    local step_name="Step 3: Extract Canon Chromosomes"
-    local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
-    local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
+  local step_name="Step 3: Extract Canonical Chromosomes"
+  local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz"
+  local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
 
-    echo;echo -e ">> [VARCALL] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    #GUARD
-    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
+  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
-    #SKIP
-    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
+  set -o xtrace
+  bcftools view "$infile" \
+    --regions "chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY,chrM" \
+    --threads "$njobs" \
+    --write-index=tbi \
+    --output-type b \
+    --output "${outfile}"
+  set +o xtrace
 
-    set -o xtrace
-    #COMMAND
-    bcftools view "$infile" \
-        --regions "chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY,chrM" \
-        --threads "$njobs" \
-        --write-index=tbi \
-        --output-type b \
-        --output "${outfile}"
-    set +o xtrace
-
-    #DETEMP
-    #rename -v "${outfile}.tmp" "${outfile}" "${outfile}"*
-
-    #CHECK
-    [ -s "$outfile" ] || { echo "<ERROR> CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
-    echo " [DONE] $step_name"
+  [ -s "$outfile" ] || { echo "[X]  CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
+  echo "[>]  $outfile"
+  echo "[!]  $step_name"
 }
 
-step3x_sort_canon_chroms() {
-    local step_name="Step 3x: Sort Chromosomes GVCF (Optional)"
-    local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
-    local outfile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_sort.g.vcf.gz"
-
-    echo;echo -e ">> [VARCALL] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
-
-    #GUARD
-    [ -f "$infile" ] || { echo "<ERROR> Missing input: $infile"; exit 1; }
-
-    #SKIP
-    [ -s "$outfile" ] && { echo " [!] $step_name already completed ($outfile exists)"; return 0; }
-
-    set -o xtrace
-    
-    #COMMAND
-    bcftools view "$infile" \
-        --regions "chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY,chrM" \
-        --threads "$njobs" \
-        --write-index=tbi \
-        --output-type b \
-        --output "${outfile}"
-    
-    set +o xtrace
-
-    #CHECK
-    [ -f "$outfile" ] && echo " [DONE] $step_name"
-}
-
+## Step 4: Split GVCFs by Chromosome
 step4_split_chroms_gvcf() {
-    local step_name="Step 4: Split Chromosomes GVCFs"
-    local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
-    local outdir="${OUTPUT_PATH}/chrom_gvcf"
-    local outfile="${outdir}/${BAM_prefix}.raw_vars"
+  local step_name="Step 4: Split Chromosomes GVCFs"
+  local infile="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
+  local outdir="${OUTPUT_PATH}/chrom_gvcf"
+  local outfile="${outdir}/${BAM_prefix}.raw_vars"
 
-    echo
-    echo -e ">> [VARCALL] $step_name >>"
-    echo "  &> $(date +%Y%m%d-%H%M)"
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
 
-    # GUARD
-    if [[ ! -f "$infile" ]]; then
-        echo "<ERROR> Missing input: $infile" >&2
-        return 1
+  if [[ ! -f "$infile" ]]; then
+    echo "[X]  Missing input: $infile" >&2
+    return 1
+  fi
+
+  echo "[i]  Creating chromosome directory..."
+  mkdir -pv "$outdir" || { echo "[X]  Cannot create output directory: $outdir" >&2; return 1; }
+
+  echo "[&]  Splitting ${infile}..."
+
+  local chroms
+  if ! chroms=$(bcftools index -s "$infile" | cut -f1); then
+    echo "[X]  Failed to extract chromosome list from index" >&2
+    return 1
+  fi
+
+  if [[ -z "$chroms" ]]; then
+    echo "[X]  No chromosomes found in $infile" >&2
+    return 1
+  fi
+
+  local count=0
+  while read -r C; do
+    [[ -z "$C" ]] && continue
+
+    echo "[&]  Extracting chromosome $C..."
+
+    if ! bcftools view "$infile" \
+      --regions "$C" \
+      --threads "$njobs" \
+      --write-index=tbi \
+      --output-type z \
+      --output "${outfile}.${C}.g.vcf.gz"
+    then
+      echo "[X]  bcftools view failed for chromosome: $C" >&2
+      return 1
     fi
 
-    echo "> Creating chrosomosome directory..."
-    mkdir -pv $outdir || {
-        echo "<ERROR> Cannot create output directory: $outdir" >&2
-        return 1
-    }
+    echo "[>]  ${outfile}.${C}.g.vcf.gz"
+    (( ++count ))
 
-    #COMMAND
-    echo "> Splitting ${infile}..."
+  done <<< "$chroms"
 
-    local chroms
-    if ! chroms=$(bcftools index -s "$infile" | cut -f1); then
-        echo "<ERROR> Failed to extract chromosome list from index" >&2
-        return 1
-    fi
+  if (( count == 0 )); then
+    echo "[X]  No chromosome files were produced" >&2
+    return 1
+  fi
 
-    if [[ -z "$chroms" ]]; then
-        echo "<ERROR> No chromosomes found in $infile" >&2
-        return 1
-    fi
-
-    local count=0
-    while read -r C; do
-
-        [[ -z "$C" ]] && continue
-
-        echo
-        echo "Extracting chromosome $C..."
-
-        if ! bcftools view "$infile" \
-            --regions "$C" \
-            --threads "$njobs" \
-            --write-index=tbi \
-            --output-type z \
-            --output "${outfile}.${C}.g.vcf.gz"
-        then
-            echo "<ERROR> bcftools view failed for chromosome: $C" >&2
-            return 1
-        fi
-
-        ((count++))
-
-    done <<< "$chroms"
-
-    if (( count == 0 )); then
-        echo "<ERROR> No chromosome files were produced" >&2
-        return 1
-    fi
-
-    #CHECK
-    echo " [DONE] $step_name ($count chromosomes)"
+  echo "[!]  $step_name ($count chromosomes)"
 }
 
-# HK Step: Remove intermediate files (optional)
+## Housekeeping: Remove intermediate files (optional)
 housekeeping() {
-    echo ; echo -e "> [HK] Housekeeping: Remove intermediate files"
+  echo
+  echo "[*]  Housekeeping: Remove intermediate files"
 
-    #TOGGLE
-    [ "$HOUSEKEEP" ] || { echo " [SKIP] Housekeeping disabled by user toggle"; return 0; }
+  [ "$HOUSEKEEP" = true ] || { echo "[i]  Skipped (HOUSEKEEP=false)"; return 0; }
 
-    if [ -f "$FINAL_FILE" ]; then
-        rm -v \
-            asdfg.txt
-        echo "[!] WARNING: Intermediate files removed."
-    else
-        echo "<ERROR> Final file not found. Intermediate files not removed."
-    fi;
+  if [ -f "$FINAL_FILE" ]; then
+    rm -v \
+      "${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz" \
+      "${OUTPUT_PATH}/${BAM_prefix}.raw_variants.g.vcf.gz.tbi"
+    echo "[W]  Intermediate files removed."
+  else
+    echo "[X]  Final file not found. Intermediate files not removed."
+  fi
 }
 
-# Finisher: checks for final output and reports success and timing
+## Finisher: check final output and report
 finisher() {
-    if [ -f "$FINAL_FILE" ]; then
-        echo
-        echo -e "<SUCCESS> GATK HAPLOTYPE CALLER [FENIX] COMPLETED"
-        echo -e "> Final output: ${FINAL_FILE}"
-        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
-        echo "> Exiting..."
-        exit 0
-    else 
-        echo
-        echo -e "<ERROR> GATK HAPLOTYPE CALLER [FENIX] UNCOMPLETED. File not found: ${FINAL_FILE}"
-        echo "> Processing Time: $( echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
-        echo "> Exiting..."
-        exit 1
-    fi
+  if [ -f "$FINAL_FILE" ]; then
+    echo
+    echo "[>]  $FINAL_FILE"
+    echo "[$] GATK HaplotypeCaller [FENIX] completed successfully!"
+    echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+    exit 0
+  else
+    echo
+    echo "[X]  GATK HaplotypeCaller [FENIX] INCOMPLETE. Final output not found: ${FINAL_FILE}"
+    echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+    exit 1
+  fi
 }
 
-#</FUNCTIONS>
+# <\FUNCTIONS> ----------------------------------------------------------------
 
-#<MAIN>
+# <MAIN> ----------------------------------------------------------------------
+
 main() {
-    #step0_map_reads_per_sample
-    step1_run_haplotype_caller
-    step2_index_raw_gvcf
-    step3_extract_canon_chroms
-    #step3x_sort_canon_chroms
-    step4_split_chroms_gvcf
-    #housekeeping
-    finisher
+  #step0_map_reads_per_sample
+  step1_run_haplotype_caller
+  step2_index_raw_gvcf
+  step3_extract_canon_chroms
+  step4_split_chroms_gvcf
+  #housekeeping
+  finisher
 }
 
 main "$@"
-#</MAIN>
 
-#<END>
+# <\MAIN> ---------------------------------------------------------------------
+
+#EOF

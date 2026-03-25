@@ -144,3 +144,7 @@ temp/
 # SVN and other VCS
 .svn/
 .hg/
+
+# Claude Code
+.claude/
+CLAUDE.md
