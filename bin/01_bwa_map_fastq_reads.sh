@@ -6,7 +6,7 @@
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-03-24
-# Version     : WIP
+# Version     : 1.0
 # Usage       : 01_bwa_map_fastq_reads_WIP.sh [input_dir] [output_path]
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
 #             : https://gatk.broadinstitute.org/hc/en-us/articles/360035889471
@@ -44,8 +44,8 @@ fi
 
 # Options
 njobs=4
-RUN_FASTQC=TRUE
-BUILD_RG=false
+RUN_FASTQC=true
+BUILD_RG=true
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -264,6 +264,7 @@ step2_bwa_mapping_per_readgroup() {
       -t "$njobs" \
       "${bwa_rg_args[@]}" \
       -v 1 \
+      -p \
       "$ref_gnm" \
       "$r1" "$r2" |
     samtools view \

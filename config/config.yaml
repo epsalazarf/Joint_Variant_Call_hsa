@@ -2,7 +2,7 @@ title: Joint_Variant_Call_hsa
 about: Config file for references and modules
 
 remote:
-  ref_gnm: "/mnt/data/amedina/lupus/WGS/bam_files/hg38.fa"
+  ref_gnm: "/mnt/data/amedina/esalazarf/References/hg38/hg38.fa"
   ref_vars: "/mnt/data/amedina/esalazarf/References/dbsnp157/dbSNP157.canon_chr.vcf.gz"
   modules: "gatk samtools mosdepth r/4.4.1"
 
