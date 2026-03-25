@@ -45,7 +45,6 @@ fi
 # Options
 njobs=4
 RUN_FASTQC=true
-BUILD_RG=true
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -161,29 +160,40 @@ step0b_annotate_read_groups() {
   echo "[*]  $step_name"
   echo "[&]  $(date +%Y%m%d-%H%M)"
 
-  [ -n "$read_groups" ] || { echo "[i]  Skipped (single pair — @RG not needed)"; return 0; }
-  [ "$BUILD_RG" = true ] || { echo "[i]  Skipped (BUILD_RG=false)"; return 0; }
-
   echo "[i]  Prepending @RG string to inputs files..."
 
-  for rg in $read_groups; do
-    local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+  if [ -z "$read_groups" ]; then
+    # Single pair — construct default @RG from sample name and R1 filename
+    local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_bwa_inputs.txt"
     [ -f "$infile" ] || { echo "[X]  Missing inputs file: $infile"; exit 1; }
-
-    # Read R1 path from inputs file and extract barcode from filename
-    local r1 r2 barcode rgID rg_line
-    { read -r r1; read -r r2; } < "$infile"
-    barcode=$(basename "$r1" | sed -nE 's/.*_([A-Za-z0-9]+)-1A_.*/\1/p')
-    barcode="${barcode:-$SAMPLE_NAME}"
-    rgID="${rg/_/.}"
-
-    rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s.%s\tLB:%s\tSM:%s" \
-      "$rgID" "$rgID" "$barcode" "$barcode" "$SAMPLE_NAME")
-
-    { echo "$rg_line"; echo "$r1"; echo "$r2"; } > "${infile}.tmp"
+    local r1 pu rg_line
+    r1=$(head -1 "$infile")
+    pu=$(basename "$r1" | sed -E 's/\.f[^.]*q\.gz$//')
+    rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s\tLB:%s\tSM:%s" \
+      "$SAMPLE_NAME" "$pu" "$SAMPLE_NAME" "$SAMPLE_NAME")
+    { echo "$rg_line"; cat "$infile"; } > "${infile}.tmp"
     mv "${infile}.tmp" "$infile"
     echo "[>]  $infile"
-  done
+  else
+    for rg in $read_groups; do
+      local infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+      [ -f "$infile" ] || { echo "[X]  Missing inputs file: $infile"; exit 1; }
+
+      # Read R1 path from inputs file and extract barcode from filename
+      local r1 r2 barcode rgID rg_line
+      { read -r r1; read -r r2; } < "$infile"
+      barcode=$(basename "$r1" | sed -nE 's/.*_([A-Za-z0-9]+)-1A_.*/\1/p')
+      barcode="${barcode:-$SAMPLE_NAME}"
+      rgID="${rg/_/.}"
+
+      rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s.%s\tLB:%s\tSM:%s" \
+        "$rgID" "$rgID" "$barcode" "$barcode" "$SAMPLE_NAME")
+
+      { echo "$rg_line"; echo "$r1"; echo "$r2"; } > "${infile}.tmp"
+      mv "${infile}.tmp" "$infile"
+      echo "[>]  $infile"
+    done
+  fi
 
   echo "[!]  $step_name"
 }
@@ -208,7 +218,7 @@ step1_reads_quality() {
     --threads "$njobs" \
     --noextract \
     --quiet \
-    $(find . -name "${SAMPLE_NAME}*.f*q.gz")
+    $(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -E '_R[12]\.f[^.]*q\.gz$' | sort)
 
   echo "[>]  $outdir"
   echo "[!]  $step_name"
@@ -264,7 +274,6 @@ step2_bwa_mapping_per_readgroup() {
       -t "$njobs" \
       "${bwa_rg_args[@]}" \
       -v 1 \
-      -p \
       "$ref_gnm" \
       "$r1" "$r2" |
     samtools view \
@@ -338,7 +347,9 @@ finisher() {
     fi
   done
 
-  echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+  local elapsed=$(( EPOCHSECONDS - script_timestamp ))
+  local h=$(( elapsed / 3600 )) m=$(( (elapsed % 3600) / 60 )) s=$(( elapsed % 60 ))
+  printf "[&]  Total time: %02d:%02d:%02d\n" "$h" "$m" "$s"
 
   if [ "$all_ok" = true ]; then
     echo "[$] BWA FASTQ Reads Mapper [FENIX] completed successfully!"
