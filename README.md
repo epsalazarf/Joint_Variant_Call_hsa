@@ -1,138 +1,172 @@
 # Joint Variant Calling Pipeline [FENIX]
 
-This repository contains a modular workflow for performing **joint variant discovery** following [GATK4 Best Practices](https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-).  
-The pipeline is organized into **three sequential steps**, each encapsulated in its own script, plus a **wrapper** to run the full process end-to-end.
+This repository contains a modular workflow for performing **joint germline variant discovery** following [GATK4 Best Practices](https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-).
+The pipeline is designed for human WGS data (hg38) and adapted for the **LAVIS-FENIX HPC** environment.
 
-> **Note:** The scripts are under active development. Logic, style, and usage will converge as the modules mature.
+> **Note:** Scripts are under active development. Steps 01–03 are functional; Steps 04–06 are stubs pending implementation.
 
 ---
 
 ## Pipeline Overview
 
-1. **Step 01 — FASTQ Alignment** *(in development)*
-  - Input: raw FASTQ reads
-  - Process: align reads to a reference genome (using `bwa mem`), produce raw BAM/CRAM files, generate alignment statistics.
-  - Output: coordinate-sorted, indexed BAM files.
+| Step | Script | Status | Input → Output |
+|------|--------|--------|----------------|
+| 01 | `01_bwa_map_fastq_reads_WIP.sh` | In testing | FASTQ → sorted BAM per read group |
+| 02 | `02_gatk_bam_qc_workflow.sh` | Functional | raw BAM → analysis-ready BAM |
+| 03 | `03_gatk_haplotype_caller.sh` | Functional | BAM → per-chromosome GVCFs |
+| 04 | `04_gatk_GenomicsDB_import.sh` | Stub | GVCFs → GenomicsDB |
+| 05 | `05_gatk_GenotypeGVCFs.sh` | Stub | GenomicsDB → joint VCF |
+| 06 | `06_gatk_vqsr.sh` | Stub | joint VCF → filtered VCF |
 
-2. **Step 02 — Mapped BAM QC (this script)**  
-  - Input: mapped BAM from Step 01
-  - Process: perform read group assignment, duplicate removal, mapping quality filtering, base quality recalibration, and coverage estimation.
-  - Output: quality-controlled, analysis-ready BAM files.
-
-3. **Step 03 — GVCF generation** *(in testing)*  
-  - Input: QC’d BAMs from Step 02
-  - Process: call SNPs/indels, generate GVCFs, splits by chromosome.
-  - Output: single-sample VCF ready for merge with other samples.
-
-4. **Step 04 — Joint Variant Calling** *(in development)*
-  - Process: perform joint genotyping, and filter variants.
+Each step is run sequentially; the output of one step is the input for the next.
 
 ---
 
-## Step 02: GATK4 BAM QC [FENIX]
+## Step 01 — FASTQ Alignment
 
-This module prepares mapped BAMs for downstream variant calling, ensuring high-quality alignments and base quality scores.
+Maps raw FASTQ reads to the reference genome per read group and produces coordinate-sorted, indexed BAM files.
 
 ### Usage
 
 ```bash
-02_gatk_bam_qc_workflow.sh [INPUT BAM] [OUTPUT PATH] [RG STRING]
+bash 01_bwa_map_fastq_reads_WIP.sh [input_dir] [output_path]
 ```
 
-### Input
+Both arguments default to the current directory. The script must be run from the directory containing the FASTQ files; `input_dir` is used only to derive the sample name.
 
-- `INPUT_BAM` : BAM file aligned to reference genome (output of Step 01).
-- `OUTPUT_PATH` : destination folder for QC outputs (default: current working directory).
+### Cluster submission
+
+```bash
+bash BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads_WIP.sh /path/to/samples/
+```
+
+Auto-discovers sample subdirectories containing FASTQ files and chains jobs sequentially on SLURM.
+
+### Supported FASTQ naming conventions
+
+| Provider | Pattern | Example |
+|----------|---------|---------|
+| Multi-lane (old) | `{SAMPLE}_{BARCODE}-1A_{PLATE}_{LANE}_{R}.fq.gz` | `L23_CKDN...-1A_227CC2LT4_L5_1.fq.gz` |
+| Single-pair | `{SAMPLE}_{R}.fq.gz` | `HL078_1.fq.gz` |
+| EGAN-style | `{SAMPLE}_R{R}.fastq.gz` | `EGAN00004552350_R1.fastq.gz` |
+
+R0 (index read) files are automatically ignored.
 
 ### Output
 
-- `${BAM}.rg.bam` — BAM with read groups assigned
-- `${BAM}.rmdup.bam` — duplicate-removed BAM
-- `${BAM}.rmdup.mqfilt.bam` — mapping-quality filtered BAM
-- `${BAM}.rmdup.mqfilt.bqsr.bam` — recalibrated BAM ready for variant calling
-- Coverage and quality metrics (`.txt`, `.pdf`, `.summary.txt`)
+- `{SAMPLE}.bam` — mapped BAM (single pair)
+- `{SAMPLE}_{PLATE_LANE}.bam` — mapped BAM per read group (multi-lane)
+- `{SAMPLE}[-{RG}].sort.bam` + `.bai` — coordinate-sorted, indexed BAM (final output)
 
-### Quality Control Steps
+### Processing steps
 
-1. **Assign Read Groups**  
-  GATK `AddOrReplaceReadGroups` for downstream compatibility.
-  
-2. **Remove Duplicates**  
-  GATK `MarkDuplicatesSpark` to discard PCR duplicates.
-  
-3. **Mapping Quality Filtering**  
-  `samtools view` with mapping quality threshold (`-q 30`).
-  
-4. **Base Quality Recalibration (BQSR)**  
-  GATK `BaseRecalibrator` and `ApplyBQSR` using known variant sites.
-  
-5. **Coverage Calculation**  
-  `mosdepth` summarizing per-sample coverage.
-  
-6. **Optional Metrics**  
-  GATK `CollectAlignmentSummaryMetrics` and `CollectInsertSizeMetrics`.
+1. **Map Input Files** — detect FASTQ pairs, write inputs manifest per read group
+2. **Annotate Read Groups** *(optional, `BUILD_RG=false`)* — prepend `@RG` tag to manifest; only meaningful for multi-lane samples
+3. **Read Quality Check** *(optional, `RUN_FASTQC=false`)* — FastQC report for all sample reads
+4. **BWA Mapping** — `bwa mem` per read group, piped to `samtools view` (unsorted BAM)
+5. **Sort and Index** — `samtools sort` + `samtools index` per BAM
 
 ---
 
-## Step 03: GATK4 HaplotypeCaller — Per-Sample GVCF Generation [FENIX]
+## Step 02 — BAM QC and Preprocessing
 
-This module performs per-sample variant calling using GATK4 HaplotypeCaller in GVCF mode and prepares chromosome-level subsets for downstream joint genotyping.
+Prepares mapped BAMs for variant calling: read group assignment, deduplication, optional MQ filtering, base quality recalibration, and coverage estimation.
 
 ### Usage
 
 ```bash
-03_gatk_haplotype_caller.sh [MAPPED_BAM] [OUTPUT_PATH]
+bash 02_gatk_bam_qc_workflow.sh <input.bam> [output_path] [RG_string]
 ```
 
-### Input
+### Cluster submission
 
-* `MAPPED_BAM` : Analysis-ready BAM file (BQSR-processed; output of Step 02).
-* `OUTPUT_PATH` : Destination directory for GVCF outputs (default: current working directory).
-* `config/config.yaml` : Environment-specific configuration file containing:
-  * `ref_gnm` — reference genome FASTA
-  * `ref_vars` — known variant sites (e.g., dbSNP)
+```bash
+bash BAMQC.seq_batch-slurmer.sh batch-list.txt bin/02_gatk_bam_qc_workflow.sh /path/to/bams/
+```
+
+Batch list: three tab-separated columns — `sample_name  sample_file  readgroup_string`
 
 ### Output
 
-* `${BAM}.raw_variants.g.vcf.gz` — raw per-sample GVCF
-* `${BAM}.raw_variants.canon_chr.g.vcf.gz` — canonical-chromosome GVCF (chr1–22, X, Y, M)
-* `chrom_gvcf/${BAM}.raw_vars.<CHR>.g.vcf.gz` — per-chromosome GVCFs
+| File | Description |
+|------|-------------|
+| `*.rg.bam` | Read groups assigned |
+| `*.rmdup.bam` | Duplicates marked and removed |
+| `*.rmdup.mqfilt.bam` | MQ ≥ 30 filtered *(if `MQ_FILTER=true`)* |
+| `*.rmdup[.mqfilt].bqsr.bam` | BQSR-recalibrated — final analysis-ready BAM |
+| `*.mosdepth.*` | Coverage summary |
+| `*.metrics.txt`, `*.pdf` | Alignment and insert-size metrics *(if `RUN_METRICS=true`)* |
 
-### Processing Steps
+### Processing steps
 
-1. **HaplotypeCaller (GVCF mode)**
-   Produces a single-sample GVCF suitable for joint genotyping.
+1. **Assign Read Groups** — GATK `AddOrReplaceReadGroups`
+2. **Mark Duplicates** — GATK `MarkDuplicatesSpark`
+3. **MQ Filter** *(optional, `MQ_FILTER=false`)* — `samtools view -q 30`; disabled by default, originally for aDNA; may reduce coverage on low-depth modern DNA
+4. **BQSR** — GATK `BaseRecalibrator` + `ApplyBQSR` using known variant sites
+5. **Coverage** *(optional, `BQSR_COV=true`)* — `mosdepth`
+6. **Alignment Metrics** *(optional, `RUN_METRICS=true`)* — GATK `CollectAlignmentSummaryMetrics` + `CollectInsertSizeMetrics`
 
-2. **Extract Canonical Chromosomes**
-   Subsets to: chr1–chr22, chrX, chrY, chrM using `bcftools view`, producing a cleaned GVCF focused on primary chromosomes.
+---
 
-3. **Split by Chromosome**
-   Automatically detects chromosomes from the GVCF index and generates one GVCF per chromosome inside a subfolder.
+## Step 03 — Per-Sample GVCF Generation
+
+Runs GATK HaplotypeCaller in GVCF mode and prepares chromosome-level subsets for joint genotyping.
+
+### Usage
+
+```bash
+bash 03_gatk_haplotype_caller.sh <bqsr.bam> [output_path]
+```
+
+### Cluster submission
+
+```bash
+bash HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
+```
+
+Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and chains jobs sequentially.
+
+### Output
+
+| File | Description |
+|------|-------------|
+| `*.raw_variants.g.vcf.gz` | Full raw GVCF |
+| `*.raw_variants.canon_chr.g.vcf.gz` | Canonical chromosomes (chr1–22, X, Y, M) |
+| `chrom_gvcf/*.raw_vars.{CHR}.g.vcf.gz` | Per-chromosome GVCFs |
+
+### Processing steps
+
+1. **HaplotypeCaller** — GVCF mode with dbSNP annotation
+2. **Index GVCF** — `bcftools index --tbi`
+3. **Extract Canonical Chromosomes** — `bcftools view` filtering to primary chromosomes
+4. **Split by Chromosome** — one GVCF per chromosome for parallel joint genotyping
+
+---
+
+## Configuration
+
+All environment-specific paths are set in `config/config.yaml` under `remote:` and `local:` keys. Scripts auto-detect the environment via SSH session variables and parse the config with an embedded `awk` snippet (no external YAML parser required).
+
+| Key | Description |
+|-----|-------------|
+| `ref_gnm` | hg38 reference FASTA (must have `.fai` and BWA index) |
+| `ref_vars` | dbSNP VCF (canonical chromosomes, bgzipped + tabixed) |
 
 ---
 
 ## Dependencies
 
-The pipeline expects the following tools available in `$PATH` (modules will be loaded automatically if run on the FENIX remote HPC system):
+Tools are loaded automatically via `module load` on FENIX; must be in `$PATH` for local use.
 
-- `gatk` (v4.x)
-- `samtools` (>=1.15)
-- `mosdepth` (>=0.3.x)
-- `fastqc` (>=0.12.1)
-- `R` (for optional plots)
-
-Reference data required (configured via `config/config.yaml`):
-
-- Reference genome FASTA (`ref_gnm`) with index
-- Known variant sites VCF (`ref_vars`)
-
----
-
-## Development Notes
-
-- **Consistency:** Each script follows the same input-output convention and sanity checks.
-- **Extensibility:** Steps are modular; users can run only the portions relevant to their analysis.
-- **Portability:** Scripts detect whether they are running on a local machine or a remote HPC environment and adapt accordingly.
+| Tool | Version | Used in |
+|------|---------|---------|
+| `bwa` | any | Step 01 |
+| `samtools` | ≥ 1.15 | Steps 01, 02 |
+| `fastqc` | ≥ 0.12.1 | Step 01 (optional) |
+| `gatk` | ≥ 4.x | Steps 02, 03 |
+| `bcftools` | any | Steps 02, 03 |
+| `mosdepth` | ≥ 0.3.x | Step 02 (optional) |
+| `R` | ≥ 4.4.1 | Step 02 (optional plots) |
 
 ---
 
