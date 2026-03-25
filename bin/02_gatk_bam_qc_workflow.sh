@@ -5,9 +5,12 @@
 # Description : Quality control for mapped BAM files. Adapted for LAVIS-FENIX.
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
-# Date        : 2026-03-24
-# Version     : 1.1
-# Usage       : 02_gatk_bam_qc_workflow.sh <input.bam> [output_path] [rg_string]
+# Date        : 2026-03-25
+# Version     : 1.2
+# Usage       : 02_gatk_bam_qc_workflow.sh <bam_files> [output_path] [rg_string] [add_rg]
+#             : bam_files — comma-separated BAM path(s); quote when passing multiple
+#             : rg_string — optional legacy @RG string; triggers step 0 when add_rg=auto
+#             : add_rg    — auto (default) | true | false  (controls step 0 execution)
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
 # =============================================================================
 
@@ -15,9 +18,13 @@ set -euo pipefail
 
 # <ARGUMENTS> -----------------------------------------------------------------
 
-BAM_FILE="${1:?Usage: $(basename "$0") <input.bam> [output_path] [rg_string]}"
+BAM_ARG="${1:?Usage: $(basename "$0") <bam_files> [output_path] [rg_string] [add_rg]}"
 OUTPUT_PATH="${2:-$PWD}"
 rg_string="${3:-}"
+ADD_RG="${4:-auto}"   # auto: run step 0 only if rg_string provided | true: always | false: never
+
+# Parse comma-separated BAM list into array
+IFS=',' read -r -a BAM_INPUTS <<< "$BAM_ARG"
 
 # <\ARGS> ---------------------------------------------------------------------
 
@@ -31,26 +38,58 @@ script_timestamp=$(date +%s)
 echo
 echo "[i]  Checking input files..."
 
-if [ -f "$BAM_FILE" ]; then
-  echo "[<]  $BAM_FILE"
-  echo "[i]  Output: ${OUTPUT_PATH}"
-  BAM_name=$(basename "$BAM_FILE")
-  BAM_base=${BAM_FILE%.*am}
-  BAM_sample=${BAM_FILE%%.*am}
-  FINAL_FILE="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
-else
-  echo "[X]  CANCELLED. File not found: ${BAM_FILE}"
-  exit 1
-fi
+# Validate all input BAMs
+for bam in "${BAM_INPUTS[@]}"; do
+  if [ -f "$bam" ]; then
+    echo "[<]  $bam"
+  else
+    echo "[X]  CANCELLED. File not found: ${bam}"
+    exit 1
+  fi
+done
+echo "[i]  Output: ${OUTPUT_PATH}"
+
+# Derive sample name from first BAM filename (basename only; fixes path-prefix bug)
+first_bam=$(basename "${BAM_INPUTS[0]}")
+BAM_sample="${first_bam%.sort.bam}"
+BAM_sample="${BAM_sample%.bam}"
+# For multiple BAMs (multiplexed): strip _rg suffix — SAMPLE_NAME must not contain underscores
+[[ ${#BAM_INPUTS[@]} -gt 1 ]] && BAM_sample="${BAM_sample%%_*}"
+echo "[i]  Sample: ${BAM_sample}"
+
+FINAL_FILE="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr.bam"
 
 # Omni-skip if final output already exists
 [ -s "$FINAL_FILE" ] && { echo "[i]  Already completed ($FINAL_FILE). Skipping."; exit 0; }
+
+# Determine step 0 execution based on ADD_RG flag
+run_step0=false
+if [[ "$ADD_RG" == "true" ]]; then
+  run_step0=true
+elif [[ "$ADD_RG" == "auto" && -n "$rg_string" ]]; then
+  run_step0=true
+fi
+
+# Guard: AddOrReplaceReadGroups accepts only one input BAM
+if [[ "$run_step0" == "true" && ${#BAM_INPUTS[@]} -gt 1 ]]; then
+  echo "[X]  CANCELLED. Step 0 (AddOrReplaceReadGroups) requires a single input BAM."
+  echo "[X]  Multiple BAMs + RG correction is unsupported. Merge first, or set add_rg=false."
+  exit 1
+fi
+
+# Resolve step 1 input sources (original BAMs, or RG-corrected BAM after step 0)
+if [[ "$run_step0" == "true" ]]; then
+  STEP1_INPUTS=("${OUTPUT_PATH}/${BAM_sample}.rg.bam")
+else
+  STEP1_INPUTS=("${BAM_INPUTS[@]}")
+fi
 
 # Options
 njobs=4
 BQSR_COV=true    # Run Step 3d: AnalyzeCovariates (auto-off if remote)
 RUN_METRICS=true # Run Step 5: Alignment & Insert Size Metrics
 MQ_FILTER=false  # Run Step 2: MQ filtering (enable for aDNA; may reduce BQSR model quality on low-coverage data)
+REMOVE_DUPS=false # false = mark duplicates (GATK best practice); true = remove (saves storage)
 HOUSEKEEP=true
 
 # Config file (relative to repo root)
@@ -107,11 +146,11 @@ echo "[i]    Variants: ${ref_vars}"
 
 # <FUNCTIONS> -----------------------------------------------------------------
 
-## Step 0: Assign Read Groups
+## Step 0: Assign Read Groups (legacy only — skip for BAMs from 01_bwa_map_fastq_reads.sh)
 step0_add_readgroup() {
   local step_name="Step 0: ReadGroup Assignation"
-  local infile="$BAM_FILE"
-  local outfile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
+  local infile="${BAM_INPUTS[0]}"
+  local outfile="${OUTPUT_PATH}/${BAM_sample}.rg.bam"
   local step_timestamp=$(date +%s)
 
   echo
@@ -153,27 +192,39 @@ step0_add_readgroup() {
   echo "[&]  Step time: $(echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
-## Step 1: Remove Duplicates (Spark)
+## Step 1: Mark/Remove Duplicates (Spark)
 step1_mark_duplicates_spark() {
-  local step_name="Step 1: Remove Duplicates (Spark)"
+  local step_name="Step 1: $([ "$REMOVE_DUPS" = true ] && echo Remove || echo Mark) Duplicates (Spark)"
   local step_timestamp=$(date +%s)
-  local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
-  local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
-  local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
+  local outfile="${OUTPUT_PATH}/${BAM_sample}.rmdup.bam"
+  local metrics="${OUTPUT_PATH}/${BAM_sample}-dups.txt"
 
   echo
   echo "[*]  $step_name"
   echo "[&]  $(date +%Y%m%d-%H%M)"
 
-  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  # Validate all inputs
+  for bam in "${STEP1_INPUTS[@]}"; do
+    [ -f "$bam" ] || { echo "[X]  Missing input: $bam"; exit 1; }
+  done
   [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
+
+  # Build --input flags for each BAM (supports merge of multiple files)
+  local input_flags=()
+  for bam in "${STEP1_INPUTS[@]}"; do
+    input_flags+=(--input "$bam")
+  done
+
+  # Mark or remove duplicates
+  local dup_args=()
+  [[ "$REMOVE_DUPS" == "true" ]] && dup_args=(--remove-all-duplicates)
 
   local shard_tmp=".${RANDOM}.parts"
   gatk --java-options "-Xmx24G" MarkDuplicatesSpark \
-    --input "$infile" \
+    "${input_flags[@]}" \
     --spark-runner LOCAL \
     --spark-master local["${njobs}"] \
-    --remove-all-duplicates \
+    "${dup_args[@]}" \
     --verbosity ERROR \
     --output-shard-tmp-dir "$shard_tmp" \
     --metrics-file "$metrics" \
@@ -189,24 +240,36 @@ step1_mark_duplicates_spark() {
   echo "[&]  Step time: $(echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 }
 
-## Step 1 (alt): Remove Duplicates (Picard)
+## Step 1 (alt): Mark/Remove Duplicates (Picard)
 step1_mark_duplicates_picard() {
-  local step_name="Step 1: Remove Duplicates (Picard)"
+  local step_name="Step 1: $([ "$REMOVE_DUPS" = true ] && echo Remove || echo Mark) Duplicates (Picard)"
   local step_timestamp=$(date +%s)
-  local infile="${OUTPUT_PATH}/${BAM_base}.rg.bam"
-  local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
-  local metrics="${OUTPUT_PATH}/${BAM_base}-dups.txt"
+  local outfile="${OUTPUT_PATH}/${BAM_sample}.rmdup.bam"
+  local metrics="${OUTPUT_PATH}/${BAM_sample}-dups.txt"
 
   echo
   echo "[*]  $step_name"
   echo "[&]  $(date +%Y%m%d-%H%M)"
 
-  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  # Validate all inputs
+  for bam in "${STEP1_INPUTS[@]}"; do
+    [ -f "$bam" ] || { echo "[X]  Missing input: $bam"; exit 1; }
+  done
   [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
+  # Build --INPUT flags for each BAM (supports merge of multiple files)
+  local input_flags=()
+  for bam in "${STEP1_INPUTS[@]}"; do
+    input_flags+=(--INPUT "$bam")
+  done
+
+  # Mark or remove duplicates
+  local dup_args=()
+  [[ "$REMOVE_DUPS" == "true" ]] && dup_args=(--REMOVE_DUPLICATES)
+
   gatk MarkDuplicates \
-    --INPUT "$infile" \
-    --REMOVE_DUPLICATES \
+    "${input_flags[@]}" \
+    "${dup_args[@]}" \
     --VERBOSITY ERROR \
     --METRICS_FILE "$metrics" \
     --OUTPUT "${outfile}.tmp"
@@ -223,9 +286,9 @@ step1_mark_duplicates_picard() {
 step2_mapping_quality_filter() {
   local step_name="Step 2: Mapping Quality Filter"
   local step_timestamp=$(date +%s)
-  local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
-  local outfile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bam"
-  local counts="${OUTPUT_PATH}/${BAM_base}.mqfilt-counts.txt"
+  local infile="${OUTPUT_PATH}/${BAM_sample}.rmdup.bam"
+  local outfile="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bam"
+  local counts="${OUTPUT_PATH}/${BAM_sample}.mqfilt-counts.txt"
 
   echo
   echo "[*]  $step_name"
@@ -260,14 +323,14 @@ step3_bqsr() {
   local step_timestamp=$(date +%s)
   local infile
   if [ "$MQ_FILTER" = true ]; then
-    infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bam"
+    infile="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bam"
   else
-    infile="${OUTPUT_PATH}/${BAM_base}.rmdup.bam"
+    infile="${OUTPUT_PATH}/${BAM_sample}.rmdup.bam"
   fi
-  local table="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr_table.txt"
-  local bam_out="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
-  local table_recal="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr_table_recal.txt"
-  local cov_report="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.cov"
+  local table="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr_table.txt"
+  local bam_out="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr.bam"
+  local table_recal="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr_table_recal.txt"
+  local cov_report="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr.cov"
 
   echo
   echo "[*]  $step_name"
@@ -352,8 +415,8 @@ step3_bqsr() {
 step4_mosdepth() {
   local step_name="Step 4: Calculate Coverage (mosdepth)"
   local step_timestamp=$(date +%s)
-  local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
-  local prefix="${OUTPUT_PATH}/${BAM_base}.rmb"
+  local infile="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr.bam"
+  local prefix="${OUTPUT_PATH}/${BAM_sample}.rmb"
   local outfile="${prefix}.mosdepth.summary.txt"
 
   echo
@@ -384,10 +447,10 @@ step4_mosdepth() {
 step5_metrics() {
   local step_name="Step 5: Collect Alignment & Insert Size Metrics"
   local step_timestamp=$(date +%s)
-  local infile="${OUTPUT_PATH}/${BAM_base}.rmdup.mqfilt.bqsr.bam"
-  local align_metrics="${OUTPUT_PATH}/${BAM_base}.alignment_metrics.txt"
-  local insert_metrics="${OUTPUT_PATH}/${BAM_base}.insert_size_metrics.txt"
-  local insert_hist="${OUTPUT_PATH}/${BAM_base}.insert_size_histogram.pdf"
+  local infile="${OUTPUT_PATH}/${BAM_sample}.rmdup.mqfilt.bqsr.bam"
+  local align_metrics="${OUTPUT_PATH}/${BAM_sample}.alignment_metrics.txt"
+  local insert_metrics="${OUTPUT_PATH}/${BAM_sample}.insert_size_metrics.txt"
+  local insert_hist="${OUTPUT_PATH}/${BAM_sample}.insert_size_histogram.pdf"
 
   echo
   echo "[*]  $step_name"
@@ -438,10 +501,10 @@ housekeeping() {
   [ "$HOUSEKEEP" = true ] || { echo "[i]  Skipped (HOUSEKEEP=false)"; return 0; }
 
   if [ -f "$FINAL_FILE" ]; then
-    rm -v \
-      "${OUTPUT_PATH}/${BAM_base}".rg.bam \
-      "${OUTPUT_PATH}/${BAM_base}".rmdup.ba*
-    [ "$MQ_FILTER" = true ] && rm -vf "${OUTPUT_PATH}/${BAM_base}".rmdup.mqfilt.ba*
+    # Remove RG-corrected BAM only if step 0 ran (file may not exist for new-workflow runs)
+    [ -f "${OUTPUT_PATH}/${BAM_sample}.rg.bam" ] && rm -v "${OUTPUT_PATH}/${BAM_sample}.rg.bam"
+    rm -vf "${OUTPUT_PATH}/${BAM_sample}".rmdup.ba*
+    [ "$MQ_FILTER" = true ] && rm -vf "${OUTPUT_PATH}/${BAM_sample}".rmdup.mqfilt.ba*
     echo "[W]  Intermediate files removed."
   else
     echo "[X]  Final file not found. Intermediate files not removed."
@@ -469,7 +532,7 @@ finisher() {
 # <MAIN> ----------------------------------------------------------------------
 
 main() {
-  step0_add_readgroup
+  [[ "$run_step0" == "true" ]] && step0_add_readgroup
   step1_mark_duplicates_spark
   #step1_mark_duplicates_picard
   step2_mapping_quality_filter
