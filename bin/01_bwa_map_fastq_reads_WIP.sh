@@ -93,6 +93,7 @@ fi
 echo "[i]  References:"
 [ -f "${ref_gnm}" ] || { echo "[X]  Reference genome not found: ${ref_gnm}"; exit 1; }
 echo "[i]    Genome  : ${ref_gnm}"
+[ -f "${ref_gnm}.bwt" ] || { echo "[X]  BWA index not found: ${ref_gnm}.bwt — run: bwa index ${ref_gnm}"; exit 1; }
 
 # <\ENV> ----------------------------------------------------------------------
 
@@ -262,7 +263,7 @@ step2_bwa_mapping_per_readgroup() {
     bwa mem \
       -t "$njobs" \
       "${bwa_rg_args[@]}" \
-      -v 0 \
+      -v 1 \
       "$ref_gnm" \
       "$r1" "$r2" |
     samtools view \
