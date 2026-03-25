@@ -44,7 +44,7 @@ fi
 
 # Options
 njobs=4
-RUN_FASTQC=false
+RUN_FASTQC=TRUE
 BUILD_RG=false
 
 # Config file (relative to repo root)
@@ -267,7 +267,6 @@ step2_bwa_mapping_per_readgroup() {
       "$r1" "$r2" |
     samtools view \
       --threads "$njobs" \
-      --fai-reference "$ref_gnm".fai \
       --bam \
       --output "${outfile}.tmp" -
     set +o xtrace
