@@ -45,6 +45,7 @@ fi
 # Options
 njobs=4
 RUN_FASTQC=true
+RUN_STATS=true
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -329,6 +330,50 @@ step3_sort_mapped_bams() {
   echo "[!]  $step_name"
 }
 
+## Step 4: BAM Statistics (samtools stats)
+step4_bam_stats() {
+  local step_name="Step 4: BAM Statistics"
+
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
+
+  [ "$RUN_STATS" = true ] || { echo "[i]  Skipped (RUN_STATS=false)"; return 0; }
+
+  local items
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
+
+  for rg in "${items[@]}"; do
+    local infile outfile
+    if [ -z "$rg" ]; then
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.bam"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.stats"
+    else
+      infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.bam"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.stats"
+    fi
+
+    [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+    [ -f "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; continue; }
+
+    echo "[&]  Running samtools stats: $(basename "$infile")"
+    set -o xtrace
+    samtools stats \
+      --reference "$ref_gnm" \
+      --threads "$njobs" \
+      "$infile" \
+      > "${outfile}.tmp"
+    set +o xtrace
+
+    mv "${outfile}.tmp" "$outfile"
+
+    [ -s "$outfile" ] || { echo "[X]  CANCELLED: $step_name failed, output missing: $outfile"; exit 1; }
+    echo "[>]  $outfile"
+  done
+
+  echo "[!]  $step_name"
+}
+
 ## Finisher: check final output and report
 finisher() {
   local items all_ok=true
@@ -369,6 +414,7 @@ main() {
   step1_reads_quality
   step2_bwa_mapping_per_readgroup
   step3_sort_mapped_bams
+  step4_bam_stats
   finisher
 }
 
