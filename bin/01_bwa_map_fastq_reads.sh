@@ -170,8 +170,7 @@ step0b_annotate_read_groups() {
     local r1 pu rg_line
     r1=$(head -1 "$infile")
     pu=$(basename "$r1" | sed -E 's/\.f[^.]*q\.gz$//')
-    rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s\tLB:%s\tSM:%s" \
-      "$SAMPLE_NAME" "$pu" "$SAMPLE_NAME" "$SAMPLE_NAME")
+    rg_line="@RG\tID:${SAMPLE_NAME}\tPL:ILLUMINA\tPU:${pu}\tLB:${SAMPLE_NAME}\tSM:${SAMPLE_NAME}"
     { echo "$rg_line"; cat "$infile"; } > "${infile}.tmp"
     mv "${infile}.tmp" "$infile"
     echo "[>]  $infile"
@@ -187,8 +186,7 @@ step0b_annotate_read_groups() {
       barcode="${barcode:-$SAMPLE_NAME}"
       rgID="${rg/_/.}"
 
-      rg_line=$(printf "@RG\tID:%s\tPL:ILLUMINA\tPU:%s.%s\tLB:%s\tSM:%s" \
-        "$rgID" "$rgID" "$barcode" "$barcode" "$SAMPLE_NAME")
+      rg_line="@RG\tID:${rgID}\tPL:ILLUMINA\tPU:${rgID}.${barcode}\tLB:${barcode}\tSM:${SAMPLE_NAME}"
 
       { echo "$rg_line"; echo "$r1"; echo "$r2"; } > "${infile}.tmp"
       mv "${infile}.tmp" "$infile"
@@ -219,7 +217,7 @@ step1_reads_quality() {
       --threads "$njobs" \
       --noextract \
       --quiet \
-      $(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -E '_R[12]\.f[^.]*q\.gz$' | sort); then
+      $(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -E '_R?[12]\.f[^.]*q\.gz$' | sort); then
     echo "[>]  $outdir"
   else
     echo "[W]  FastQC failed (non-fatal) — skipping quality check, continuing pipeline"
