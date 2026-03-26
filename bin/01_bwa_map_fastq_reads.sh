@@ -226,6 +226,140 @@ step1_reads_quality() {
   echo "[!]  $step_name"
 }
 
+## Step 1b: Validate and Repair R1/R2 Pair Synchronization
+step1b_validate_and_repair_read_pairs() {
+  local step_name="Step 1b: Validate and Repair Read Pair Synchronization"
+
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
+
+  local items
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
+
+  for rg in "${items[@]}"; do
+    local infile
+    [ -z "$rg" ] && infile="${OUTPUT_PATH}/${SAMPLE_NAME}_bwa_inputs.txt" \
+                 || infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}_bwa_inputs.txt"
+
+    # Extract R1/R2 paths from inputs file (skip @RG header line if present)
+    local r1 r2
+    if grep -q '^@RG' "$infile"; then
+      r1=$(sed -n '2p' "$infile")
+      r2=$(sed -n '3p' "$infile")
+    else
+      r1=$(sed -n '1p' "$infile")
+      r2=$(sed -n '2p' "$infile")
+    fi
+
+    echo "[&]  Checking${rg:+ [$rg]}: $(basename "$r1") / $(basename "$r2")"
+
+    # --- Read count parity check ---
+    local count1 count2
+    count1=$(( $(zcat "$r1" | wc -l) / 4 ))
+    count2=$(( $(zcat "$r2" | wc -l) / 4 ))
+
+    local needs_repair=false mismatch_reason=""
+
+    if [ "$count1" -ne "$count2" ]; then
+      mismatch_reason="read count mismatch (R1: $count1, R2: $count2)"
+      needs_repair=true
+    else
+      # --- Sampled read-name check at 4 positions (1, 25%, 50%, 75%) ---
+      local total=$count1
+      local pos1=1
+      local pos2=$(( total / 4 ))
+      local pos3=$(( total / 2 ))
+      local pos4=$(( (total * 3) / 4 ))
+      [ "$pos2" -lt 1 ] && pos2=1
+      [ "$pos3" -lt 1 ] && pos3=1
+      [ "$pos4" -lt 1 ] && pos4=1
+
+      local name1 name2 line_num
+      for pos in "$pos1" "$pos2" "$pos3" "$pos4"; do
+        line_num=$(( (pos - 1) * 4 + 1 ))
+        name1=$(zcat "$r1" | awk -v n="$line_num" 'NR==n{print;exit}' \
+          | cut -d' ' -f1 | sed 's|/[12]$||')
+        name2=$(zcat "$r2" | awk -v n="$line_num" 'NR==n{print;exit}' \
+          | cut -d' ' -f1 | sed 's|/[12]$||')
+        if [ "$name1" != "$name2" ]; then
+          mismatch_reason="read name mismatch at position $pos (R1: $name1, R2: $name2)"
+          needs_repair=true
+          break
+        fi
+      done
+    fi
+
+    if [ "$needs_repair" = false ]; then
+      echo "[i]  Pairs OK${rg:+ [$rg]}"
+      continue
+    fi
+
+    # --- Repair branch ---
+    echo "[W]  Pair synchronization failed${rg:+ [$rg]}: $mismatch_reason"
+    echo "[&]  Loading bbtools for repair..."
+    module load bbtools
+
+    local r1_repaired="${OUTPUT_PATH}/${SAMPLE_NAME}${rg:+_$rg}_R1.repaired.fastq.gz"
+    local r2_repaired="${OUTPUT_PATH}/${SAMPLE_NAME}${rg:+_$rg}_R2.repaired.fastq.gz"
+    local singletons="${OUTPUT_PATH}/${SAMPLE_NAME}${rg:+_$rg}_singletons.fastq.gz"
+
+    echo "[&]  Running repair.sh..."
+    set -o xtrace
+    repair.sh \
+      in1="$r1" in2="$r2" \
+      out1="$r1_repaired" out2="$r2_repaired" \
+      outsingle="$singletons" \
+      overwrite=true
+    set +o xtrace
+
+    local singleton_count
+    singleton_count=$(( $(zcat "$singletons" | wc -l) / 4 ))
+    echo "[i]  Singletons after repair: $singleton_count"
+
+    # Update inputs file in place with repaired paths
+    local rg_line=""
+    grep -q '^@RG' "$infile" && rg_line=$(grep '^@RG' "$infile")
+    {
+      [ -n "$rg_line" ] && echo "$rg_line"
+      echo "$r1_repaired"
+      echo "$r2_repaired"
+    } > "${infile}.tmp"
+    mv "${infile}.tmp" "$infile"
+    echo "[>]  Repaired inputs written to: $infile"
+
+    # Verify repair succeeded with sampled name check
+    local verify_ok=true
+    local total_rep
+    total_rep=$(( $(zcat "$r1_repaired" | wc -l) / 4 ))
+    for pos in 1 $(( total_rep / 4 )) $(( total_rep / 2 )) $(( (total_rep * 3) / 4 )); do
+      [ "$pos" -lt 1 ] && pos=1
+      local line_num=$(( (pos - 1) * 4 + 1 ))
+      local vname1 vname2
+      vname1=$(zcat "$r1_repaired" | awk -v n="$line_num" 'NR==n{print;exit}' \
+        | cut -d' ' -f1 | sed 's|/[12]$||')
+      vname2=$(zcat "$r2_repaired" | awk -v n="$line_num" 'NR==n{print;exit}' \
+        | cut -d' ' -f1 | sed 's|/[12]$||')
+      if [ "$vname1" != "$vname2" ]; then
+        echo "[X]  Repair did not synchronize pairs${rg:+ [$rg]} at position $pos"
+        echo "[X]    R1: $vname1"
+        echo "[X]    R2: $vname2"
+        verify_ok=false
+        break
+      fi
+    done
+
+    if [ "$verify_ok" = false ]; then
+      echo "[X]  CANCELLED: Repair verification failed${rg:+ [$rg]}."
+      exit 1
+    fi
+
+    echo "[i]  Repair verified OK${rg:+ [$rg]}"
+  done
+
+  echo "[!]  $step_name"
+}
+
 ## Step 2: BWA Mapping to Reference (per read group)
 step2_bwa_mapping_per_readgroup() {
   local step_name="Step 2: BWA Mapping to Reference [Iterative]"
@@ -413,6 +547,7 @@ main() {
   step0_map_reads_per_sample
   step0b_annotate_read_groups
   step1_reads_quality
+  step1b_validate_and_repair_read_pairs
   step2_bwa_mapping_per_readgroup
   step3_sort_mapped_bams
   step4_bam_stats
