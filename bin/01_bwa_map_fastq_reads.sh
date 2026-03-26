@@ -214,14 +214,17 @@ step1_reads_quality() {
   echo "[i]  Output folder: ${outdir}"
 
   echo "[&]  Running FastQC for all $SAMPLE_NAME reads..."
-  fastqc \
-    --outdir "$outdir" \
-    --threads "$njobs" \
-    --noextract \
-    --quiet \
-    $(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -E '_R[12]\.f[^.]*q\.gz$' | sort)
+  if JAVA_TOOL_OPTIONS="-Djava.awt.headless=true" fastqc \
+      --outdir "$outdir" \
+      --threads "$njobs" \
+      --noextract \
+      --quiet \
+      $(find . -maxdepth 1 -name "${SAMPLE_NAME}*.f*q.gz" | grep -E '_R[12]\.f[^.]*q\.gz$' | sort); then
+    echo "[>]  $outdir"
+  else
+    echo "[W]  FastQC failed (non-fatal) — skipping quality check, continuing pipeline"
+  fi
 
-  echo "[>]  $outdir"
   echo "[!]  $step_name"
 }
 
