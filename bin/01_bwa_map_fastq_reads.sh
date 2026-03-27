@@ -423,10 +423,10 @@ step4_bam_stats() {
     local infile outfile
     if [ -z "$rg" ]; then
       infile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.bam"
-      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.stats"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.stats.txt"
     else
       infile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.bam"
-      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.stats"
+      outfile="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.stats.txt"
     fi
 
     [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
