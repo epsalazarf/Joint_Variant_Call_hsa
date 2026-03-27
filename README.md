@@ -4,6 +4,8 @@ This repository contains a modular workflow for performing **joint germline vari
 The pipeline is designed for human WGS data (hg38) and adapted for the **LAVIS-FENIX HPC** environment.
 
 > **Note:** Scripts are under active development. Steps 01–03 are functional; Steps 04–06 are stubs pending implementation. Steps 01 and 02 must be used together for new samples — script 01 embeds proper read groups so script 02's RG correction step is skipped automatically.
+>
+> For low-coverage WGS (~3.5–8X), use `03_glimpse2_imputation.sh` instead of `03_gatk_haplotype_caller.sh`. Both scripts accept the same input (`.rmdup.mqfilt.bqsr.bam`) and produce per-chromosome VCFs under `chrom_gvcf/`.
 
 ---
 
@@ -13,12 +15,13 @@ The pipeline is designed for human WGS data (hg38) and adapted for the **LAVIS-F
 |------|--------|--------|----------------|
 | 01 | `01_bwa_map_fastq_reads.sh` | Functional | FASTQ → sorted BAM per read group |
 | 02 | `02_gatk_bam_qc_workflow.sh` | Functional | raw BAM → analysis-ready BAM |
-| 03 | `03_gatk_haplotype_caller.sh` | Functional | BAM → per-chromosome GVCFs |
+| 03a | `03_gatk_haplotype_caller.sh` | Functional | BAM → per-chromosome GVCFs *(standard coverage)* |
+| 03b | `03_glimpse2_imputation.sh` | Functional | BAM → per-chromosome imputed VCFs *(low-coverage)* |
 | 04 | `04_gatk_GenomicsDB_import.sh` | Stub | GVCFs → GenomicsDB |
 | 05 | `05_gatk_GenotypeGVCFs.sh` | Stub | GenomicsDB → joint VCF |
 | 06 | `06_gatk_vqsr.sh` | Stub | joint VCF → filtered VCF |
 
-Each step is run sequentially; the output of one step is the input for the next.
+Each step is run sequentially; the output of one step is the input for the next. Steps 03a and 03b are alternatives — choose based on coverage depth.
 
 ---
 
@@ -155,6 +158,45 @@ Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and chains jobs sequentially.
 
 ---
 
+## Step 03b — Per-Sample Imputation and Phasing (Low-Coverage WGS)
+
+An alternative to Step 03a for low-pass WGS data (~3.5–8X coverage). Uses [GLIMPSE2](https://odelaneau.github.io/GLIMPSE/) for reference-panel-based imputation and phasing, producing phased genotype calls from shallow sequencing without a separate genotype likelihood step.
+
+Reference panel preparation (Steps 1–2) is cached in a shared directory and reused across samples, so the first sample incurs the setup cost and subsequent samples skip directly to imputation.
+
+### Usage
+
+```bash
+bash 03_glimpse2_imputation.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
+```
+
+### Output
+
+| File | Description |
+|------|-------------|
+| `chrom_gvcf/SAMPLE.imputed.chrN.vcf.gz` + `.tbi` | Per-chromosome phased, imputed VCF |
+| `SAMPLE.imputed.canon_chr.vcf.gz` + `.tbi` | Whole-genome merged VCF (chr1–22, X, Y, M) |
+| `imputed_chunks/` | Intermediate chunk BCFs and ligate lists *(removed if `HOUSEKEEP=true`)* |
+
+### Processing steps
+
+1. **Chunk Chromosomes** *(cached)* — `GLIMPSE2_chunk` defines imputation windows per chromosome using the reference panel and genetic map
+2. **Split Reference** *(cached)* — `GLIMPSE2_split_reference` builds binary reference panel files per chunk
+3. **Phase and Impute** — `GLIMPSE2_phase` computes genotype likelihoods from the BAM and imputes genotypes per chunk
+4. **Ligate** — `GLIMPSE2_ligate` merges chunks into a single chromosome-wide phased BCF, converted to VCF.gz
+5. **Collect** — `bcftools concat` merges all per-chromosome VCFs into the final whole-genome output
+
+### Configuration keys (in `config/config.yaml`)
+
+| Key | Description |
+|-----|-------------|
+| `ref_panel` | Directory of per-chromosome reference panel BCF files (`reference_panel.chrN.bcf`) |
+| `ref_gmap` | Directory of per-chromosome genetic map files (`chrN.b38.gmap.gz`); chrY/chrM skipped if absent |
+
+Chromosomes for which the reference panel BCF or genetic map is missing are skipped gracefully with an `[i]` message.
+
+---
+
 ## Configuration
 
 All environment-specific paths are set in `config/config.yaml` under `remote:` and `local:` keys. Scripts auto-detect the environment via SSH session variables and parse the config with an embedded `awk` snippet (no external YAML parser required).
@@ -163,6 +205,8 @@ All environment-specific paths are set in `config/config.yaml` under `remote:` a
 |-----|-------------|
 | `ref_gnm` | hg38 reference FASTA (must have `.fai` and BWA index) |
 | `ref_vars` | dbSNP VCF (canonical chromosomes, bgzipped + tabixed) |
+| `ref_panel` | Directory of GLIMPSE2 reference panel BCF files (Step 03b only) |
+| `ref_gmap` | Directory of GLIMPSE2 genetic map files, one per chromosome (Step 03b only) |
 
 ---
 
@@ -175,10 +219,12 @@ Tools are loaded automatically via `module load` on FENIX; must be in `$PATH` fo
 | `bwa` | any | Step 01 |
 | `samtools` | ≥ 1.15 | Steps 01, 02 |
 | `fastqc` | ≥ 0.12.1 | Step 01 (optional) |
-| `gatk` | ≥ 4.x | Steps 02, 03 |
-| `bcftools` | any | Steps 02, 03 |
+| `bbtools` (`repair.sh`) | ≥ 38.00 | Step 01 (single-pair samples) |
+| `gatk` | ≥ 4.x | Steps 02, 03a |
+| `bcftools` | any | Steps 02, 03a, 03b |
 | `mosdepth` | ≥ 0.3.x | Step 02 (optional) |
 | `R` | ≥ 4.4.1 | Step 02 (optional plots) |
+| `GLIMPSE2_chunk` / `GLIMPSE2_split_reference` / `GLIMPSE2_phase` / `GLIMPSE2_ligate` | ≥ 2.0 | Step 03b |
 
 ---
 
