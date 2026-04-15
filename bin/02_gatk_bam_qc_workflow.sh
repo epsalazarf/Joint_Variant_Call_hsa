@@ -121,7 +121,9 @@ eval "$(
 
 # Load modules on remote (work-around due to faulty parser [ARC02])
 if [[ "$env_type" == "remote" ]]; then
-  echo "[i]  Loading modules..."
+  echo "[@]  Loading modules..."
+  module unload oracle-java
+  module load oracle-java/25.0.2
   module load gatk
   module load samtools
   module load mosdepth
@@ -138,9 +140,9 @@ fi
 # Guard: reference file availability
 echo "[i]  References:"
 [ -f "${ref_gnm}" ]  || { echo "[X]  Reference genome not found: ${ref_gnm}"; exit 1; }
-echo "[i]    Genome  : ${ref_gnm}"
+echo "   - Genome  : ${ref_gnm}"
 [ -f "${ref_vars}" ] || { echo "[X]  Reference variants not found: ${ref_vars}"; exit 1; }
-echo "[i]    Variants: ${ref_vars}"
+echo "   - Variants: ${ref_vars}"
 
 # <\ENV> ----------------------------------------------------------------------
 
@@ -533,8 +535,8 @@ finisher() {
 
 main() {
   [[ "$run_step0" == "true" ]] && step0_add_readgroup
-  step1_mark_duplicates_spark
-  #step1_mark_duplicates_picard
+  #step1_mark_duplicates_spark
+  step1_mark_duplicates_picard
   step2_mapping_quality_filter
   step3_bqsr
   step4_mosdepth

@@ -14,6 +14,7 @@ if [[ -z "$BATCH_SCRIPT" || -z "$DIR_PATH" ]]; then
 fi
 
 #CHECK: Directory exists
+DIR_PATH=$(realpath $DIR_PATH)
 if [ -d "$DIR_PATH" ]; then
   echo "[INFO] Moving to: $DIR_PATH"
   cd "$DIR_PATH"
