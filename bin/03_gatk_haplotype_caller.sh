@@ -122,6 +122,7 @@ step1_run_haplotype_caller() {
     --dbsnp "$ref_vars" \
     --emit-ref-confidence GVCF \
     --verbosity ERROR \
+    --native-pair-hmm-threads 4 \
     --create-output-variant-index \
     --output "${outfile}"
 

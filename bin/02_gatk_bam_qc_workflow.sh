@@ -87,6 +87,7 @@ fi
 # Options
 njobs=4
 BQSR_COV=true    # Run Step 3d: AnalyzeCovariates (auto-off if remote)
+BQSR_EVAL=false  # Run post-recalibration BaseRecalibrator for AnalyzeCovariates input
 RUN_METRICS=true # Run Step 5: Alignment & Insert Size Metrics
 MQ_FILTER=false  # Run Step 2: MQ filtering (enable for aDNA; may reduce BQSR model quality on low-coverage data)
 REMOVE_DUPS=false # false = mark duplicates (GATK best practice); true = remove (saves storage)
@@ -352,6 +353,7 @@ step3_bqsr() {
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
       --verbosity ERROR \
+      --native-pair-hmm-threads 4 \
       --output "${table}.tmp"
     mv "${table}.tmp" "$table"
     echo "[!]   Step 3a: Model Building"
@@ -369,6 +371,7 @@ step3_bqsr() {
       --bqsr-recal-file "$table" \
       --create-output-bam-index \
       --verbosity ERROR \
+      --native-pair-hmm-threads 4 \
       --output "${bam_out}.tmp"
     rename -v "${bam_out}.tmp" "${bam_out}" "${bam_out}.tmp"*
     echo "[!]   Step 3b: Apply Recalibration"
@@ -376,9 +379,10 @@ step3_bqsr() {
 
   echo "[&]  Step time (3a+3b): $(echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
 
-  ## 3c: Post-recalibration evaluation table
+  ## 3c: Post-recalibration evaluation table (optional)
   echo
-  echo "[*]  Step 3c: Evaluate Recalibration"
+  echo "[*]  Step 3c: Evaluate Recalibration (post-BQSR BaseRecalibrator)"
+  [ "$BQSR_EVAL" = true ] || { echo "[i]  Skipped (BQSR_EVAL=false)"; return 0; }
   if [ -s "$table_recal" ]; then
     echo "[i]   Post-recalibration table exists: $table_recal"
   else
@@ -387,6 +391,7 @@ step3_bqsr() {
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
       --verbosity ERROR \
+      --native-pair-hmm-threads 4 \
       --output "${table_recal}.tmp"
     mv "${table_recal}.tmp" "$table_recal"
     echo "[!]   Step 3c: Evaluate Recalibration"
@@ -395,7 +400,14 @@ step3_bqsr() {
   ## 3d: Analyze Covariates (optional, local only; requires R)
   echo
   echo "[*]  Step 3d: Analyze Covariates"
-  [ "$BQSR_COV" = true ] || { echo "[i]   Skipped (BQSR_COV=false)"; return 0; }
+  if [ "$BQSR_COV" != true ]; then
+    echo "[i]   Skipped (BQSR_COV=false)"
+    return 0
+  fi
+  if [ "$BQSR_EVAL" != true ]; then
+    echo "[W]   Skipped (BQSR_COV=true requires BQSR_EVAL=true)"
+    return 0
+  fi
 
   if [ -s "${cov_report}.pdf" ]; then
     echo "[i]   Covariate plots exist: ${cov_report}.pdf"

@@ -1,7 +1,11 @@
 #!/bin/bash
-# Title: HAPCALL Batch Slurmer (sequential)
-# Usage: ./BAMQC.batch-slurmer 03_gatk_haplotype_caller.sh [input directory]
+# Title: HAPCALL Batch Slurmer
+# Usage: ./HAPCALL.batch-slurmer 03_gatk_haplotype_caller.sh [input directory]
 # Each line in batch list: sample_name    sample_file
+#
+# NOTE: Run this slurmer only after all Script 02 (BAMQC) jobs have completed.
+# Intra-pipeline sequencing (01->02->03) is enforced by the operator, not SLURM.
+# Each sample is submitted independently; samples run in parallel.
 
 BATCH_SCRIPT="$(realpath $1)"
 DIR_PATH="${2:-$PWD}"
@@ -38,37 +42,22 @@ else
   [[ -s "$BATCH_LIST" ]] && echo "[INFO] Creating batch list from found files: $BATCH_LIST"
 fi
 
-# Function to submit job with optional dependency
+# Function to submit job independently (no inter-sample dependency)
 submit_job() {
-  local dependency="$1"
-  shift
   local script="$1"
   shift
   local args=("$@")
   local jobname="HAPCALL-${sample//[^A-Za-z0-9_]/_}-$EPOCHSECONDS"
 
-
-  if [[ -n "$dependency" ]]; then
-    jobid=$(sbatch --dependency=afterany:"$dependency" \
-                   --job-name="${jobname}" \
-                   --nodes=1 --ntasks=1 --cpus-per-task=2 \
-                   --mem=20G \
-                   --output=%x.%j.log \
-                   --wrap "bash '$script' '${args[0]}'" \
-            | awk '{print $4}')
-  else
-    jobid=$(sbatch --job-name="${jobname}" \
-                   --nodes=1 --ntasks=1 --cpus-per-task=2 \
-                   --mem=20G \
-                   --output=%x.%j.log \
-                   --wrap "bash '$script' '${args[0]}' '$(dirname "${args[0]}")'" \
-            | awk '{print $4}')
-  fi
+  jobid=$(sbatch --job-name="${jobname}" \
+                 --nodes=1 --ntasks=1 --cpus-per-task=4 \
+                 --mem=32G \
+                 --output=%x.%j.log \
+                 --wrap "bash '$script' '${args[0]}' '$(dirname "${args[0]}")'" \
+          | awk '{print $4}')
 
   echo "$jobid"
 }
-
-prev_jobid=""
 
 while IFS=$'\t' read -r sample bamfile ; do
   [[ -z "$sample" || "$sample" =~ ^# ]] && continue
@@ -77,15 +66,13 @@ while IFS=$'\t' read -r sample bamfile ; do
   echo
   echo "Submitting job for: $sample ($bamfile)"
 
-  # Submit job and chain after previous (continue even on fail)
-  jobid=$(submit_job "$prev_jobid" "$BATCH_SCRIPT" "$(basename $bamfile)")
+  jobid=$(submit_job "$BATCH_SCRIPT" "$(basename $bamfile)")
   echo "  Job ID: $jobid"
 
-  prev_jobid="$jobid"
   cd "$DIR_PATH"
-  sleep 10
+  sleep 1
 
 done < "$BATCH_LIST"
 
 echo
-echo "All jobs submitted. Last job in chain: $prev_jobid"
+echo "All jobs submitted."

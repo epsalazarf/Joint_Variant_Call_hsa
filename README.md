@@ -15,6 +15,7 @@ The pipeline is designed for human WGS data (hg38) and adapted for the **LAVIS-F
 |------|--------|--------|----------------|
 | 01 | `01_bwa_map_fastq_reads.sh` | Functional | FASTQ → sorted BAM per read group |
 | 02 | `02_gatk_bam_qc_workflow.sh` | Functional | raw BAM → analysis-ready BAM |
+| 02a | `02a_bqsr_evaluate.sh` | Functional | analysis-ready BAM → post-BQSR recal table + covariate PDF *(retroactive evaluation)* |
 | 03a | `03_gatk_haplotype_caller.sh` | Functional | BAM → per-chromosome GVCFs *(standard coverage)* |
 | 03b | `03_glimpse2_imputation.sh` | Functional | BAM → per-chromosome imputed VCFs *(low-coverage)* |
 | 04 | `04_gatk_GenomicsDB_import.sh` | Stub | GVCFs → GenomicsDB |
@@ -43,7 +44,7 @@ Both arguments default to the current directory. The script must be run from the
 bash BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads.sh /path/to/samples/
 ```
 
-Auto-discovers sample subdirectories containing FASTQ files and chains jobs sequentially on SLURM.
+Auto-discovers sample subdirectories containing FASTQ files and submits one independent SLURM job per sample (parallel). Run BAMQC slurmer only after all BWAMAP jobs complete.
 
 ### Supported FASTQ naming conventions
 
@@ -98,6 +99,8 @@ bash BAMQC.seq_batch-slurmer.sh batch-list.txt bin/02_gatk_bam_qc_workflow.sh /p
 
 Batch list (legacy): three tab-separated columns — `sample_name  sample_file  readgroup_string`
 
+Each sample is submitted as an independent SLURM job (parallel, 8 CPUs / 32 GB). Run HAPCALL slurmer only after all BAMQC jobs complete.
+
 ### Output
 
 All output files are named using the sample name as base (e.g. `SAMPLE01`).
@@ -117,9 +120,36 @@ All output files are named using the sample name as base (e.g. `SAMPLE01`).
 0. **Assign Read Groups** *(optional — legacy only; skipped automatically for BAMs from script 01)* — GATK `AddOrReplaceReadGroups`; controlled by `add_rg` argument
 1. **Mark Duplicates** — GATK `MarkDuplicatesSpark`; accepts one or more input BAMs (merged on the fly); set `REMOVE_DUPS=true` to remove instead of mark
 2. **MQ Filter** *(optional, `MQ_FILTER=false`)* — `samtools view -q 30`; disabled by default; originally for aDNA
-3. **BQSR** — GATK `BaseRecalibrator` + `ApplyBQSR` using known variant sites
+3. **BQSR** — GATK `BaseRecalibrator` + `ApplyBQSR` using known variant sites; post-recalibration evaluation (second `BaseRecalibrator` + `AnalyzeCovariates`) is optional via `BQSR_EVAL=true` (default off — use `02a_bqsr_evaluate.sh` for retroactive runs)
 4. **Coverage** — `mosdepth` fast-mode genome-wide summary
 5. **Alignment Metrics** *(optional, `RUN_METRICS=true`)* — GATK `CollectAlignmentSummaryMetrics` + `CollectInsertSizeMetrics`
+
+---
+
+## Step 02a — Retroactive BQSR Evaluation
+
+Runs only the post-recalibration evaluation steps (post-BQSR `BaseRecalibrator` + `AnalyzeCovariates`) on an already-recalibrated BAM. Use this when script 02 was run with `BQSR_EVAL=false` (the default) and covariate plots are needed retroactively, without re-running the full QC workflow.
+
+### Usage
+
+```bash
+bash 02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
+```
+
+### Output
+
+| File | Description |
+|------|-------------|
+| `SAMPLE.bqsr_table_recal.txt` | Post-BQSR recalibration table |
+| `SAMPLE.bqsr_covariates.pdf` | Before/after covariate plots *(if `BQSR_COV=true`, default)* |
+| `SAMPLE.bqsr_covariates.csv` | Intermediate covariate data |
+
+The pre-BQSR table (`SAMPLE.bqsr_table.txt`) must already exist in `output_path` — it is produced by script 02's step 3a and not removed by housekeeping.
+
+### Processing steps
+
+1. **Post-BQSR BaseRecalibrator** — second recalibration pass on the recalibrated BAM
+2. **AnalyzeCovariates** *(optional, `BQSR_COV=true`)* — generates before/after recalibration PDF report
 
 ---
 
@@ -139,7 +169,7 @@ bash 03_gatk_haplotype_caller.sh <bqsr.bam> [output_path]
 bash HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
 ```
 
-Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and chains jobs sequentially.
+Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and submits one independent SLURM job per sample (parallel, 4 CPUs / 32 GB).
 
 ### Output
 
