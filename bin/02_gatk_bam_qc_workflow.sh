@@ -348,12 +348,11 @@ step3_bqsr() {
   if [ -s "$table" ]; then
     echo "[i]   Model table exists: $table"
   else
-    gatk BaseRecalibrator \
+    gatk --java-options "-XX:ParallelGCThreads=8" BaseRecalibrator \
       --input "$infile" \
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
       --verbosity ERROR \
-      --native-pair-hmm-threads 4 \
       --output "${table}.tmp"
     mv "${table}.tmp" "$table"
     echo "[!]   Step 3a: Model Building"
@@ -365,13 +364,12 @@ step3_bqsr() {
   if [ -s "$bam_out" ]; then
     echo "[i]   Recalibrated BAM exists: $bam_out"
   else
-    gatk ApplyBQSR \
+    gatk --java-options "-XX:ParallelGCThreads=8" ApplyBQSR \
       --input "$infile" \
       --reference "$ref_gnm" \
       --bqsr-recal-file "$table" \
       --create-output-bam-index \
       --verbosity ERROR \
-      --native-pair-hmm-threads 4 \
       --output "${bam_out}.tmp"
     rename -v "${bam_out}.tmp" "${bam_out}" "${bam_out}.tmp"*
     echo "[!]   Step 3b: Apply Recalibration"
@@ -386,12 +384,11 @@ step3_bqsr() {
   if [ -s "$table_recal" ]; then
     echo "[i]   Post-recalibration table exists: $table_recal"
   else
-    gatk BaseRecalibrator \
+    gatk --java-options "-XX:ParallelGCThreads=8" BaseRecalibrator \
       --input "$bam_out" \
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
       --verbosity ERROR \
-      --native-pair-hmm-threads 4 \
       --output "${table_recal}.tmp"
     mv "${table_recal}.tmp" "$table_recal"
     echo "[!]   Step 3c: Evaluate Recalibration"
