@@ -38,12 +38,15 @@ BATCH_LIST="$PWD/$(basename $PWD).bamqc_input_files.txt"
 if [ -s "$BATCH_LIST" ]; then
   echo "[INFO] Reading files from pre-existing batch list: $BATCH_LIST"
 else
-  find . \( -name "$BAM_PATTERN_A" -o -name "$BAM_PATTERN_B" \) | \
+  find . \( -name "$BAM_PATTERN_A" -o -name "$BAM_PATTERN_B" \) | sort | \
     awk 'BEGIN{FS="/";OFS="\t"}{
       f=$(NF);
       gsub(/\.sort\.bam$|\.sorted\.bam$/, "", f);
-      print f, $0, ""
-    }' > "$BATCH_LIST"
+      split(f, parts, "_"); sid = parts[1];
+      if (sid in seen) { files[sid] = files[sid] "," $0 }
+      else             { seen[sid]=1; files[sid]=$0; order[++n]=sid }
+    }
+    END{ for(i=1;i<=n;i++){ sid=order[i]; print sid, files[sid], "" } }' > "$BATCH_LIST"
   if [[ -s "$BATCH_LIST" ]]; then
     echo "[INFO] Creating batch list from found files: $BATCH_LIST"
   else
@@ -73,19 +76,25 @@ submit_job() {
 while IFS=$'\t' read -r sample bamfile rgstring; do
   [[ -z "$sample" || "$sample" =~ ^# ]] && continue
 
-  abs_bamfile="$(realpath "$bamfile")"
-  bam_basename="$(basename "$bamfile")"
+  # Resolve each BAM (supports comma-separated split-lane files)
+  IFS=',' read -r -a bam_array <<< "$bamfile"
+  abs_bams=(); basenames=()
+  for bam in "${bam_array[@]}"; do
+    abs_bams+=("$(realpath "$bam")")
+    basenames+=("$(basename "$bam")")
+  done
+  bam_list=$(IFS=','; echo "${basenames[*]}")
 
   echo
-  echo "Preparing: $sample ($abs_bamfile)"
+  echo "Preparing: $sample (${#abs_bams[@]} file(s))"
   mkdir -p "$sample"
   cd "$sample" || exit
-  ln -sf "$abs_bamfile" .
+  for abs_bam in "${abs_bams[@]}"; do ln -sf "$abs_bam" .; done
 
   echo "Submitting job for: $sample"
   [[ -n "$rgstring" ]] && echo "  RG string: $rgstring"
 
-  jobid=$(submit_job "$BATCH_SCRIPT" "$bam_basename" "." "$rgstring")
+  jobid=$(submit_job "$BATCH_SCRIPT" "$bam_list" "." "$rgstring")
   echo "  Job ID: $jobid"
 
   cd "$DIR_PATH"
