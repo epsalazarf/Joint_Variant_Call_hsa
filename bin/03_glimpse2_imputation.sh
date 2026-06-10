@@ -7,6 +7,8 @@
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-03-27
 # Version     : 1.0
+# Status      : PAUSED — reference panel chunks not yet generated; ref_panel/ref_gmap
+#               config keys must be populated before this script can run.
 # Usage       : 03_glimpse2_imputation.sh <bqsr.bam> [output_path]
 # Source      : GLIMPSE2 — https://odelaneau.github.io/GLIMPSE/
 # =============================================================================

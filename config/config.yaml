@@ -4,9 +4,15 @@ about: Config file for references and modules
 remote:
   ref_gnm: "/mnt/data/amedina/esalazarf/References/hg38/hg38.fa"
   ref_vars: "/mnt/data/amedina/esalazarf/References/dbsnp157/dbSNP157.canon_chr.vcf.gz"
+  ref_panel: "/mnt/data/fsanchezq/esalazarf/References/hg38/H1K2/current_release"
+  ref_gmap: "/mnt/data/amedina/esalazarf/References/hg38/genetic_maps.b38"
+  scratch_root: "/scratch/groups/amedina"
   modules: "gatk samtools mosdepth r/4.4.1"
 
 local:
   ref_gnm: "$HOME/Data/REFx/hg38.p14/hg38.fa.gz"
   ref_vars: "$HOME/Data/REFx/dbSNP157/dbSNP157.canon_chr.vcf.gz"
+  ref_panel: "$HOME/Data/HGDP+1KGP.v2/current_release"
+  ref_gmap: "$HOME/Data/REFx/EDIT_THIS/genetic_maps.b38"
+  scratch_root: ""
   modules: ""
