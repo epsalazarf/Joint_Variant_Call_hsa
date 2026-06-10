@@ -63,8 +63,13 @@ if [ -z "$CHR" ]; then
 fi
 echo "[i]  Chromosome: ${CHR}"
 
-# Config file (relative to repo root)
-CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../../config/config.yaml"
+# Config file — use SLURM_SUBMIT_DIR when available because sbatch copies the
+# script to a spool directory, making $0-based paths resolve incorrectly.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+  CONFIG_FILE="${SLURM_SUBMIT_DIR}/../../config/config.yaml"
+else
+  CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../../config/config.yaml"
+fi
 
 # Detect environment
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
