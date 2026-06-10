@@ -6,6 +6,31 @@ Step-by-step usage guide for the Joint Variant Calling Pipeline.
 
 ---
 
+## Script Layout
+
+```
+bin/
+├── 01_bwa_map_fastq_reads.sh       # Step 01 — FASTQ alignment
+├── 02_gatk_bam_qc_workflow.sh      # Step 02 — BAM QC + BQSR
+├── 03_gatk_haplotype_caller.sh     # Step 03a — HaplotypeCaller (standard coverage)
+├── 03_glimpse2_imputation.sh       # Step 03b — GLIMPSE2 imputation (low-coverage)
+├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (stub)
+├── 05_gatk_GenotypeGVCFs.sh        # Step 05 — Joint genotyping (stub)
+├── 06_gatk_vqsr.sh                 # Step 06 — VQSR filtering (stub)
+└── supp/
+    ├── 00_scan_fastq_pairs.sh              # Inspect FASTQ pairs before mapping
+    ├── 00_glimpse2_ref_panel_prep.sh       # Prepare GLIMPSE2 binary reference panel
+    ├── 02a_bqsr_evaluate.sh                # Retroactive BQSR covariate plots
+    ├── 03-s4_gvcf_chrom_split.sh           # Split GVCFs by chromosome
+    ├── BWAMAP.seq_batch-slurmer.sh         # Batch SLURM launcher for Step 01
+    ├── BAMQC.seq_batch-slurmer.sh          # Batch SLURM launcher for Step 02
+    ├── HAPCALL.seq_batch-slurmer.sh        # Batch SLURM launcher for Step 03a
+    ├── PIPELINE.single_sample.sh           # End-to-end single-sample launcher
+    └── run_pipeline.sh                     # Full pipeline wrapper (stub)
+```
+
+---
+
 ## Prerequisites
 
 1. **Configure paths** in `config/config.yaml` — set `ref_gnm`, `ref_vars`, and any other keys for your environment (`remote:` for FENIX, `local:` for workstation).
@@ -19,10 +44,41 @@ Step-by-step usage guide for the Joint Variant Calling Pipeline.
 Inspect a sample directory before mapping to verify FASTQ pairs are correctly detected.
 
 ```bash
-bash bin/00_scan_fastq_pairs.sh [input_dir]
+bash bin/supp/00_scan_fastq_pairs.sh [input_dir]
 ```
 
 Defaults to `$PWD`. Prints detected pairs without running anything.
+
+---
+
+## Step 00 — GLIMPSE2 Reference Panel Prep (one-time setup)
+
+Converts a phased reference panel VCF into the binary format required by GLIMPSE2.
+Run once per chromosome before using Step 03b. Jobs can be submitted in parallel.
+
+```bash
+# With QC (normalize + filter to biallelic SNPs)
+sbatch bin/supp/00_glimpse2_ref_panel_prep.sh <panel.chr1.vcf.gz>
+
+# Without QC (panel already normalized — e.g. H1K2 ARPnorm)
+sbatch bin/supp/00_glimpse2_ref_panel_prep.sh <panel.chr1.vcf.gz> "" false
+
+# All chromosomes in parallel
+for vcf in /path/to/panel/panel.chr*.vcf.gz; do
+  sbatch bin/supp/00_glimpse2_ref_panel_prep.sh "$vcf" "" false
+done
+```
+
+Arguments: `<panel.vcf.gz>  [output_panel_dir]  [run_qc: true|false]`  
+`output_panel_dir` defaults to the `ref_panel` path in `config/config.yaml`.
+
+### Output
+
+| Path | Description |
+|------|-------------|
+| `<ref_panel>/reference_panel.<CHR>.bcf` | QC'd BCF (indexed) |
+| `<ref_panel>/../glimpse2_cache/chunks.<CHR>.txt` | Imputation window definitions |
+| `<ref_panel>/../glimpse2_cache/ref_panel.<CHR>.chunk*.bin` | Binary panels for `GLIMPSE2_phase` |
 
 ---
 
@@ -42,7 +98,7 @@ Both arguments default to `$PWD`.
 ### Batch (SLURM)
 
 ```bash
-bash bin/BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads.sh /path/to/samples/
+bash bin/supp/BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads.sh /path/to/samples/
 ```
 
 Auto-discovers sample subdirectories and submits one job per sample (parallel). Wait for all jobs to finish before running Step 02.
@@ -92,7 +148,7 @@ The fourth argument (`add_rg`) controls read group assignment: `auto` (default) 
 ### Batch (SLURM)
 
 ```bash
-bash bin/BAMQC.seq_batch-slurmer.sh batch-list.txt bin/02_gatk_bam_qc_workflow.sh /path/to/bams/
+bash bin/supp/BAMQC.seq_batch-slurmer.sh batch-list.txt bin/02_gatk_bam_qc_workflow.sh /path/to/bams/
 ```
 
 `batch-list.txt` is tab-separated: `sample_name  sample_file  readgroup_string`.  
@@ -131,7 +187,7 @@ Generates before/after BQSR covariate plots without re-running the full Step 02.
 **Prerequisite:** `SAMPLE.bqsr_table.txt` must exist in the output directory (produced by Step 02).
 
 ```bash
-bash bin/02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
+bash bin/supp/02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
 ```
 
 ### Output
@@ -157,7 +213,7 @@ bash bin/03_gatk_haplotype_caller.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path
 ### Batch (SLURM)
 
 ```bash
-bash bin/HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
+bash bin/supp/HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
 ```
 
 Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and submits one job per sample (4 CPUs / 32 GB).
@@ -176,14 +232,15 @@ squeue -u $USER | grep HAPCALL
 
 ---
 
-## Step 03b — GLIMPSE2 Imputation (low-coverage) — PAUSED
+## Step 03b — GLIMPSE2 Imputation (low-coverage)
 
-> **Status: Paused.** Reference panel chunks have not yet been generated. This step cannot be run until `GLIMPSE2_chunk` and `GLIMPSE2_split_reference` outputs are available and the `ref_panel` / `ref_gmap` config keys are populated.
+For low-pass WGS (~3.5–8×). Uses GLIMPSE2 for reference-panel-based imputation and phasing.
+Produces the same per-chromosome VCF layout as Step 03a and feeds into Step 04.
 
-For low-pass WGS (~3.5–8×). Uses GLIMPSE2 for reference-panel-based imputation and phasing. Produces the same per-chromosome VCF layout as Step 03a and feeds into Step 04.
+> **Prerequisite:** run `bin/supp/00_glimpse2_ref_panel_prep.sh` for all chromosomes first
+> and confirm `ref_panel` / `ref_gmap` keys are populated in `config/config.yaml`.
 
 ```bash
-# Do NOT run — blocked on reference chunk generation
 bash bin/03_glimpse2_imputation.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
 ```
 
@@ -202,9 +259,9 @@ These scripts are scaffolded but not yet implemented.
 
 | Step | Script | Purpose |
 |------|--------|---------|
-| 04 | `04_gatk_GenomicsDB_import.sh` | Import per-sample GVCFs into GenomicsDB |
-| 05 | `05_gatk_GenotypeGVCFs.sh` | Joint genotyping across all samples |
-| 06 | `06_gatk_vqsr.sh` | VQSR filtering of joint VCF |
+| 04 | `bin/04_gatk_GenomicsDB_import.sh` | Import per-sample GVCFs into GenomicsDB |
+| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | Joint genotyping across all samples |
+| 06 | `bin/06_gatk_vqsr.sh` | VQSR filtering of joint VCF |
 
 Do not use these for production runs. Watch for status updates in the pipeline overview table in [README.md](README.md).
 
@@ -214,6 +271,7 @@ Do not use these for production runs. Watch for status updates in the pipeline o
 
 ```bash
 squeue -u $USER              # all your jobs
+squeue -u $USER | grep BWAMAP
 squeue -u $USER | grep BAMQC
 squeue -u $USER | grep HAPCALL
 ```
@@ -237,4 +295,4 @@ bash bin/02_gatk_bam_qc_workflow.sh /output/bams/sample01.sort.bam /output/bqsr/
 bash bin/03_gatk_haplotype_caller.sh /output/bqsr/sample01.rmdup.mqfilt.bqsr.bam /output/gvcf/
 ```
 
-For batches: use the `*_batch-slurmer.sh` wrappers in sequence, waiting for each stage to complete before submitting the next.
+For batches: use the `*_batch-slurmer.sh` wrappers in `bin/supp/` in sequence, waiting for each stage to complete before submitting the next.
