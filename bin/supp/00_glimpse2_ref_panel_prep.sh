@@ -17,7 +17,7 @@
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-06-10
-# Version     : 1.1
+# Version     : 1.2
 # Usage       : sbatch bin/00_glimpse2_ref_panel_prep.sh <panel.vcf.gz> [output_panel_dir] [run_qc]
 #             : bash   bin/00_glimpse2_ref_panel_prep.sh <panel.vcf.gz> [output_panel_dir] [run_qc]
 #             : panel.vcf.gz       — phased reference panel VCF/BCF for one chromosome
@@ -63,12 +63,26 @@ if [ -z "$CHR" ]; then
 fi
 echo "[i]  Chromosome: ${CHR}"
 
-# Config file — use SLURM_SUBMIT_DIR when available because sbatch copies the
-# script to a spool directory, making $0-based paths resolve incorrectly.
-if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+# Config file resolution (in priority order):
+# 1. PIPELINE_CONFIG env var — explicit override, required when submitting from outside the repo
+# 2. SLURM_SUBMIT_DIR — works when sbatch is called from bin/supp/
+# 3. $0-relative — interactive runs from the script's own directory
+if [[ -n "${PIPELINE_CONFIG:-}" ]]; then
+  CONFIG_FILE="$PIPELINE_CONFIG"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/config.yaml" ]]; then
+  CONFIG_FILE="${SLURM_SUBMIT_DIR}/config.yaml"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
   CONFIG_FILE="${SLURM_SUBMIT_DIR}/../../config/config.yaml"
 else
   CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../../config/config.yaml"
+fi
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "[X]  Config not found: ${CONFIG_FILE}"
+  echo "[X]  Options:"
+  echo "[X]    1. Copy or symlink config.yaml into your working directory"
+  echo "[X]    2. Set PIPELINE_CONFIG=/absolute/path/to/config/config.yaml"
+  exit 1
 fi
 
 # Detect environment
@@ -124,13 +138,13 @@ mkdir -p "$SCRATCH_JOB" "$TMPDIR"
 # Load modules on remote
 if [[ "$env_type" == "remote" ]]; then
   echo "[i]  Loading modules..."
-  module load glimpse2 2>/dev/null \
-    || echo "[W]  glimpse2 module unavailable — checking PATH"
+  module load glimpse 2>/dev/null \
+    || echo "[W]  glimpse module unavailable — checking PATH"
   module load bcftools
 fi
 
 # Guard: required binaries
-for bin in bcftools GLIMPSE2_chunk GLIMPSE2_split_reference; do
+for bin in bcftools GLIMPSE2_chunk_static GLIMPSE2_split_reference_static; do
   command -v "$bin" > /dev/null 2>&1 \
     || { echo "[X]  ${bin} not found in PATH"; exit 1; }
 done
@@ -346,9 +360,10 @@ step3_chunk() {
 
   echo "[i]  Running GLIMPSE2_chunk for ${CHR}..."
   set -o xtrace
-  GLIMPSE2_chunk \
+  GLIMPSE2_chunk_static \
     --input "$SCR_SITES" \
     --region "$CHR" \
+    --sequential \
     --map "$GMAP_FILE" \
     --output "${SCR_CHUNKS}.tmp"
   set +o xtrace
@@ -382,19 +397,16 @@ step4_split_reference() {
   local n_done=0 n_skip=0
 
   while IFS=$'\t' read -r idx _chr input_region output_region; do
-    local scr_bin="${SCR_BIN_PREFIX}.chunk${idx}.bin"
     local dest_bin="${CACHE_DIR}/ref_panel.${CHR}.chunk${idx}.bin"
 
     if [ -s "$dest_bin" ]; then
       n_skip=$(( n_skip + 1 ))
-      # Restore to scratch so the imputation script can find a local copy later if needed
-      [ -s "$scr_bin" ] || cp "$dest_bin" "$scr_bin"
       continue
     fi
 
     echo "[&]  Splitting: ${CHR} chunk ${idx}  (${output_region})"
     set -o xtrace
-    GLIMPSE2_split_reference \
+    GLIMPSE2_split_reference_static \
       --reference "$SCR_BCF" \
       --map "$GMAP_FILE" \
       --input-region "$input_region" \
@@ -403,10 +415,13 @@ step4_split_reference() {
       --threads "$njobs"
     set +o xtrace
 
-    [ -s "$scr_bin" ] || { echo "[X]  CANCELLED: $step_name — missing output: $scr_bin"; exit 1; }
+    # GLIMPSE2 appends region coordinates to the output filename (e.g. chunk0_chr22_1_17316684.bin)
+    local scr_bin_actual
+    scr_bin_actual=$(find "$SCRATCH_JOB" -maxdepth 1 -name "ref_panel.${CHR}.chunk${idx}*.bin" 2>/dev/null | head -1)
+    [ -n "$scr_bin_actual" ] || { echo "[X]  CANCELLED: $step_name — no .bin output found for chunk ${idx}"; exit 1; }
 
     echo "[i]  Copying binary chunk to persistent storage..."
-    cp "$scr_bin" "$dest_bin"
+    cp "$scr_bin_actual" "$dest_bin"
 
     echo "[>]  $dest_bin"
     n_done=$(( n_done + 1 ))
