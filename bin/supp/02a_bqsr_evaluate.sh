@@ -44,7 +44,7 @@ fi
 BQSR_COV=true   # Run Step 2: AnalyzeCovariates (only reason to run this script)
 
 # Config file (relative to repo root)
-CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
+CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../../config/config.yaml"
 
 # Detect environment
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
@@ -108,12 +108,11 @@ step1_post_bqsr_baserecalibrator() {
   [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
   [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
-  gatk BaseRecalibrator \
+  gatk --java-options "-XX:ParallelGCThreads=8" BaseRecalibrator \
     --input "$infile" \
     --reference "$ref_gnm" \
     --known-sites "$ref_vars" \
     --verbosity ERROR \
-    --native-pair-hmm-threads 4 \
     --output "${outfile}.tmp"
 
   mv "${outfile}.tmp" "$outfile"
@@ -142,7 +141,7 @@ step2_analyze_covariates() {
   [ -f "$table_recal" ] || { echo "[X]  Missing post-BQSR table: $table_recal"; exit 1; }
   [ -s "${cov_report}.pdf" ] && { echo "[i]  Already completed (${cov_report}.pdf exists)"; return 0; }
 
-  gatk AnalyzeCovariates \
+  gatk --java-options "-XX:ParallelGCThreads=8" AnalyzeCovariates \
     --before-report-file "$table" \
     --after-report-file "$table_recal" \
     --verbosity ERROR \

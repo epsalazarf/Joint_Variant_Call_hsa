@@ -32,7 +32,7 @@ S03="${SCRIPT_DIR}/03_gatk_haplotype_caller.sh"
 
 # <ENVIRONMENT> ---------------------------------------------------------------
 
-CONFIG_FILE="${SCRIPT_DIR}/../config/config.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/../../config/config.yaml"
 
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
   env_type="remote"
