@@ -5,7 +5,7 @@ remote:
   ref_gnm: "/mnt/data/amedina/esalazarf/References/hg38/hg38.fa"
   ref_vars: "/mnt/data/amedina/esalazarf/References/dbsnp157/dbSNP157.canon_chr.vcf.gz"
   ref_panel: "/mnt/data/fsanchezq/esalazarf/References/hg38/H1K2/current_release"
-  ref_gmap: "/mnt/data/amedina/esalazarf/References/hg38/genetic_maps.b38"
+  ref_gmap: "/mnt/data/fsanchezq/esalazarf/References/hg38/genetic_maps.b38"
   scratch_root: "/scratch/groups/amedina"
   modules: "gatk samtools mosdepth r/4.4.1"
 
