@@ -206,10 +206,10 @@ fi
 # 8 CPUs / 16G — matches njobs=8 FENIX default; samtools sort TMPDIR → scratch
 
 JOB01=$(sbatch \
-  --job-name="PIPELINE-S01-${SAMPLE_ID}" \
+  --job-name="${SAMPLE_ID}-S01-${EPOCHSECONDS}" \
   --nodes=1 --ntasks=1 --cpus-per-task=8 \
   --mem=16G \
-  --output="${LOG_DIR}/S01.%j.log" \
+  --output="${LOG_DIR}/%x.%j.log" \
   --wrap "$WRAP_S01" \
   | awk '{print $4}')
 
@@ -219,11 +219,11 @@ echo "[>] Step 01 submitted  — Job ${JOB01}  (8 CPUs / 16G)"
 # 8 CPUs / 32G — MarkDuplicatesSpark -Xmx24G + GC threads; biggest scratch win
 
 JOB02=$(sbatch \
-  --job-name="PIPELINE-S02-${SAMPLE_ID}" \
+  --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
   --nodes=1 --ntasks=1 --cpus-per-task=8 \
   --mem=32G \
   --dependency=afterok:"${JOB01}" \
-  --output="${LOG_DIR}/S02.%j.log" \
+  --output="${LOG_DIR}/%x.%j.log" \
   --wrap "$WRAP_S02" \
   | awk '{print $4}')
 
@@ -233,11 +233,11 @@ echo "[>] Step 02 submitted  — Job ${JOB02}  (8 CPUs / 32G)  [after ${JOB01}]"
 # 4 CPUs / 32G — --native-pair-hmm-threads 4, -Xmx20G on FENIX
 
 JOB03=$(sbatch \
-  --job-name="PIPELINE-S03-${SAMPLE_ID}" \
+  --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
   --nodes=1 --ntasks=1 --cpus-per-task=4 \
   --mem=32G \
   --dependency=afterok:"${JOB02}" \
-  --output="${LOG_DIR}/S03.%j.log" \
+  --output="${LOG_DIR}/%x.%j.log" \
   --wrap "$WRAP_S03" \
   | awk '{print $4}')
 
@@ -247,7 +247,7 @@ echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G)  [after ${JOB02}]"
 
 echo
 echo "[i] Monitor jobs:"
-echo "    squeue -u \$USER | grep PIPELINE"
+echo "    squeue -u \$USER | grep ${SAMPLE_ID}"
 echo "    squeue -j ${JOB01},${JOB02},${JOB03}"
 echo "[i] Logs: ${LOG_DIR}/"
 echo
