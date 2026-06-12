@@ -115,8 +115,10 @@ build_scratch_wrap() {
   case "$input_mode" in
     fastq)
       # FASTQs are read-only references; no copy needed.
-      # Script 01 takes input_dir (SAMPLE_DIR) and output_path (scratch).
-      stage_inputs="SCRIPT_ARGS=('${SAMPLE_DIR}' \"\$SCRATCH_JOB\")"
+      # Script 01 uses `find .` for FASTQ discovery, so it must run from SAMPLE_DIR.
+      # Output goes to scratch; sort BAMs are copied back by the copy-back section.
+      stage_inputs="cd '${SAMPLE_DIR}'
+SCRIPT_ARGS=('${SAMPLE_DIR}' \"\$SCRATCH_JOB\")"
       ;;
     sort_bams)
       stage_inputs="
@@ -185,7 +187,7 @@ if [[ "$USE_SCRATCH" == true ]]; then
 
 else
 
-  WRAP_S01="set -euo pipefail; bash '${S01}' '${SAMPLE_DIR}' '${SAMPLE_DIR}'"
+  WRAP_S01="set -euo pipefail; cd '${SAMPLE_DIR}'; bash '${S01}' '${SAMPLE_DIR}' '${SAMPLE_DIR}'"
 
   WRAP_S02="
     set -euo pipefail
