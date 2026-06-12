@@ -155,7 +155,8 @@ find \"\$SCRATCH_JOB\" -maxdepth 1 -name '${glob}' -exec cp -r {} '${SAMPLE_DIR}
   fi
 
   printf '%s' "
-SCRATCH_JOB='${scratch_root}/\${USER}/job_\${SLURM_JOB_ID}'
+set -euo pipefail
+SCRATCH_JOB=\"${scratch_root}/\${USER}/job_\${SLURM_JOB_ID}\"
 mkdir -p \"\$SCRATCH_JOB/tmp\"
 export TMPDIR=\"\$SCRATCH_JOB/tmp\"
 echo \"[i] Scratch: \$SCRATCH_JOB\"
@@ -184,15 +185,17 @@ if [[ "$USE_SCRATCH" == true ]]; then
 
 else
 
-  WRAP_S01="bash '${S01}' '${SAMPLE_DIR}' '${SAMPLE_DIR}'"
+  WRAP_S01="set -euo pipefail; bash '${S01}' '${SAMPLE_DIR}' '${SAMPLE_DIR}'"
 
   WRAP_S02="
+    set -euo pipefail
     bam_list=\$(find '${SAMPLE_DIR}' -maxdepth 1 \
                  \\( -name '*.sort.bam' -o -name '*.sorted.bam' \\) | sort | paste -sd,)
     [[ -z \"\$bam_list\" ]] && { echo '<ERROR> No *.sort.bam in ${SAMPLE_DIR}'; exit 1; }
     bash '${S02}' \"\$bam_list\" '${SAMPLE_DIR}'"
 
   WRAP_S03="
+    set -euo pipefail
     bqsr_bam=\$(find '${SAMPLE_DIR}' -maxdepth 1 -name '*.rmdup.mqfilt.bqsr.bam' | head -1)
     [[ -z \"\$bqsr_bam\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
     bash '${S03}' \"\$bqsr_bam\" '${SAMPLE_DIR}'"
