@@ -34,7 +34,7 @@ if [ -f "$BAM_FILE" ]; then
   echo "[<]  $BAM_FILE"
   echo "[i]  Output: ${OUTPUT_PATH}"
   BAM_name=$(basename "$BAM_FILE")
-  BAM_prefix=${BAM_FILE%%.*bam}
+  BAM_prefix=${BAM_name%%.*bam}
   FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
 else
   echo "[X]  CANCELLED. File not found: ${BAM_FILE}"
