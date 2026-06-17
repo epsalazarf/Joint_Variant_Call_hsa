@@ -204,52 +204,87 @@ else
 
 fi
 
+# Resumability: each step's internal skip logic checks its OUTPUT_PATH, but with
+# scratch that is a fresh empty dir every run — so prior outputs in SAMPLE_DIR are
+# never seen and steps redo all work. We therefore decide HERE whether to submit
+# each step, based on whether its final output already exists in SAMPLE_DIR.
+#
+#   S01 → *.sort.bam                        (per-lane sorted BAMs)
+#   S02 → *.rmdup.mqfilt.bqsr.bam           (analysis-ready BAM)
+#   S03 → *.raw_variants.canon_chr.g.vcf.gz (final GVCF)
+#
+# Skipped steps drop out of the afterok chain; the next submitted step depends on
+# the most recent job actually submitted (if any).
+
+have_output() { find "$SAMPLE_DIR" -maxdepth 1 -name "$1" | grep -q .; }
+
+DEP=""          # afterok dependency for the next job to submit
+SUBMITTED=()    # job ids actually submitted (for the monitor hint)
+
 # --- Step 01: BWA Alignment --------------------------------------------------
 # 8 CPUs / 16G — matches njobs=8 FENIX default; samtools sort TMPDIR → scratch
 
-JOB01=$(sbatch \
-  --job-name="${SAMPLE_ID}-S01-${EPOCHSECONDS}" \
-  --nodes=1 --ntasks=1 --cpus-per-task=8 \
-  --mem=16G \
-  --output="${LOG_DIR}/%x.%j.log" \
-  --wrap "$WRAP_S01" \
-  | awk '{print $4}')
-
-echo "[>] Step 01 submitted  — Job ${JOB01}  (8 CPUs / 16G)"
+if have_output "*.sort.bam"; then
+  echo "[SKIP] Step 01 — sorted BAM(s) already present in ${SAMPLE_DIR}"
+else
+  JOB01=$(sbatch \
+    --job-name="${SAMPLE_ID}-S01-${EPOCHSECONDS}" \
+    --nodes=1 --ntasks=1 --cpus-per-task=8 \
+    --mem=16G \
+    --output="${LOG_DIR}/%x.%j.log" \
+    --wrap "$WRAP_S01" \
+    | awk '{print $4}')
+  echo "[>] Step 01 submitted  — Job ${JOB01}  (8 CPUs / 16G)"
+  DEP="afterok:${JOB01}"
+  SUBMITTED+=("$JOB01")
+fi
 
 # --- Step 02: BAM QC + BQSR --------------------------------------------------
 # 8 CPUs / 32G — MarkDuplicatesSpark -Xmx24G + GC threads; biggest scratch win
 
-JOB02=$(sbatch \
-  --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
-  --nodes=1 --ntasks=1 --cpus-per-task=8 \
-  --mem=32G \
-  --dependency=afterok:"${JOB01}" \
-  --output="${LOG_DIR}/%x.%j.log" \
-  --wrap "$WRAP_S02" \
-  | awk '{print $4}')
-
-echo "[>] Step 02 submitted  — Job ${JOB02}  (8 CPUs / 32G)  [after ${JOB01}]"
+if have_output "*.rmdup.mqfilt.bqsr.bam"; then
+  echo "[SKIP] Step 02 — analysis-ready BAM already present in ${SAMPLE_DIR}"
+else
+  JOB02=$(sbatch \
+    --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
+    --nodes=1 --ntasks=1 --cpus-per-task=8 \
+    --mem=32G \
+    ${DEP:+--dependency="$DEP"} \
+    --output="${LOG_DIR}/%x.%j.log" \
+    --wrap "$WRAP_S02" \
+    | awk '{print $4}')
+  echo "[>] Step 02 submitted  — Job ${JOB02}  (8 CPUs / 32G)${DEP:+  [${DEP}]}"
+  DEP="afterok:${JOB02}"
+  SUBMITTED+=("$JOB02")
+fi
 
 # --- Step 03: HaplotypeCaller ------------------------------------------------
 # 4 CPUs / 32G — --native-pair-hmm-threads 4, -Xmx20G on FENIX
 
-JOB03=$(sbatch \
-  --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
-  --nodes=1 --ntasks=1 --cpus-per-task=4 \
-  --mem=32G \
-  --dependency=afterok:"${JOB02}" \
-  --output="${LOG_DIR}/%x.%j.log" \
-  --wrap "$WRAP_S03" \
-  | awk '{print $4}')
-
-echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G)  [after ${JOB02}]"
+if have_output "*.raw_variants.canon_chr.g.vcf.gz"; then
+  echo "[SKIP] Step 03 — final GVCF already present in ${SAMPLE_DIR}"
+else
+  JOB03=$(sbatch \
+    --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
+    --nodes=1 --ntasks=1 --cpus-per-task=4 \
+    --mem=32G \
+    ${DEP:+--dependency="$DEP"} \
+    --output="${LOG_DIR}/%x.%j.log" \
+    --wrap "$WRAP_S03" \
+    | awk '{print $4}')
+  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G)${DEP:+  [${DEP}]}"
+  SUBMITTED+=("$JOB03")
+fi
 
 # <\MAIN> ---------------------------------------------------------------------
 
 echo
-echo "[i] Monitor jobs:"
-echo "    squeue -u \$USER | grep ${SAMPLE_ID}"
-echo "    squeue -j ${JOB01},${JOB02},${JOB03}"
-echo "[i] Logs: ${LOG_DIR}/"
+if [[ ${#SUBMITTED[@]} -eq 0 ]]; then
+  echo "[i] Nothing to submit — all step outputs already present in ${SAMPLE_DIR}."
+else
+  echo "[i] Monitor jobs:"
+  echo "    squeue -u \$USER | grep ${SAMPLE_ID}"
+  echo "    squeue -j $(IFS=,; echo "${SUBMITTED[*]}")"
+  echo "[i] Logs: ${LOG_DIR}/"
+fi
 echo
