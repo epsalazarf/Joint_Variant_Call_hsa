@@ -267,6 +267,45 @@ Do not use these for production runs. Watch for status updates in the pipeline o
 
 ---
 
+## Scratch Storage (`/scratch`) — what it is and isn't for
+
+The single-sample launcher (`bin/supp/PIPELINE.single_sample.sh`) has a `USE_SCRATCH` toggle (default `true` on FENIX). When enabled it:
+
+- reads **inputs directly from NFS** (`/mnt/data`),
+- points **`TMPDIR` and all intermediate/output files at `/scratch`**,
+- copies only the **final outputs back** to the sample directory, then wipes scratch.
+
+### Benchmark finding (Sept 2026)
+
+A controlled benchmark of Step 02 (the most I/O-heavy step — MarkDuplicates + BQSR), 3 iterations per arm, scratch vs. direct-NFS, run in parallel on the same day:
+
+| Arm | copy-in | run (compute) | copy-out | **total** |
+|-----|---------|---------------|----------|-----------|
+| NFS | — | 15:41:58 | — | **15:41:58** |
+| scratch | 0:02:29 | 15:36:02 | 0:02:48 | **15:41:19** |
+
+**Scratch gave essentially no wall-time benefit (~39 s out of ~15h42m, within noise).** An earlier single-run comparison that *appeared* to show a 5.5h gain was node/scheduling variance, not scratch.
+
+**Why:** these GATK steps are **CPU-bound with sequential, streaming I/O**, not bandwidth- or IOPS-bound. They demand only ~1–3 MB/s from storage, which any filesystem supplies trivially; sequential reads are also NFS's best case (readahead + page cache). The bottleneck is the single-threaded CPU work, which is identical on either filesystem. Staging a large read-once BAM to scratch is therefore pure overhead.
+
+### So why still use scratch?
+
+Its value here is **storage hygiene and cluster citizenship, not speed**:
+
+- Bulky transient intermediates (e.g. `*.rmdup.bam`) never touch the group's **persistent quota** on `/mnt/data` — they live and die on the auto-wiped scratch volume.
+- Routing **`TMPDIR`** to scratch offloads tool temp/spill traffic (the genuinely IOPS-heavy part) from shared NFS.
+
+### Guidance for future cluster scripts
+
+1. **Don't stage large, read-once inputs to scratch** — read them directly from NFS. Copy-in only pays off for random-access, multi-pass, or many-small-file workloads.
+2. **Always point `TMPDIR` (and tool tmp flags: `samtools sort -T`, `gatk --tmp-dir`, Spark tmp) at scratch** — cheap, and it captures exactly the IOPS/spill traffic scratch is good for.
+3. **Write intermediates + outputs to scratch, copy only finals back** — the quota win, speed-neutral.
+4. **Don't expect wall-time speedups for sequential GATK steps** — judge scratch on quota and shared-resource health, not job runtime.
+
+To reproduce or extend the benchmark: `bin/supp/S02_scratch_benchmark.sh [sample_dir] [n_iters]`.
+
+---
+
 ## Monitoring Jobs
 
 ```bash

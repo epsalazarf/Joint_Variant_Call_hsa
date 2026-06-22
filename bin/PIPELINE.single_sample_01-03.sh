@@ -3,8 +3,13 @@
 # Title       : Single-Sample Sequential Pipeline Launcher [FENIX]
 # Description : Submits Steps 01→02→03 as chained SLURM jobs for one sample.
 #               Each step is held until the previous one succeeds (afterok).
-#               When USE_SCRATCH=true, each job stages I/O through /scratch to
-#               avoid NFS congestion during heavy read/write operations.
+#               When USE_SCRATCH=true, inputs are read directly from NFS while
+#               TMPDIR + intermediate/output files use /scratch, then finals are
+#               copied back. This keeps bulky transient intermediates off the
+#               group's persistent quota. NOTE: benchmarking showed scratch
+#               gives no wall-time speedup for these sequential GATK steps (they
+#               are CPU-bound) — its value here is storage/quota and cluster
+#               citizenship, not speed. See INSTRUCTIONS.md.
 # Usage       : PIPELINE.single_sample.sh [sample_dir]
 #               sample_dir — directory named as the sample ID, containing FASTQ
 #                            files. Defaults to $PWD.
@@ -95,11 +100,19 @@ echo
 
 # Helper: build a scratch-enabled wrap for a pipeline step.
 #
+# Strategy (see Sept-2026 benchmark in INSTRUCTIONS.md): inputs are read
+# DIRECTLY from NFS (SAMPLE_DIR) — they are large and read once sequentially,
+# so staging them to scratch is pure overhead with no speedup. Scratch is used
+# only for TMPDIR (tool temp/spill — the genuinely IOPS-heavy traffic) and for
+# intermediate + output files, which are then copied back to SAMPLE_DIR. This
+# keeps bulky transient intermediates off the group's persistent quota without
+# paying a useless copy-in tax.
+#
 #   $1  — pipeline script path (expands at submission time)
 #   $2  — "inputs" descriptor, one of:
-#           "fastq"      : FASTQs stay in SAMPLE_DIR (read-only); just set TMPDIR
-#           "sort_bams"  : copy *.sort.bam[.bai] from SAMPLE_DIR to scratch
-#           "bqsr_bam"   : copy *.rmdup.mqfilt.bqsr.bam[.bai] from SAMPLE_DIR to scratch
+#           "fastq"      : run S01 from SAMPLE_DIR (FASTQs read in place)
+#           "sort_bams"  : read *.sort.bam from SAMPLE_DIR (NFS), output to scratch
+#           "bqsr_bam"   : read *.rmdup.mqfilt.bqsr.bam from SAMPLE_DIR (NFS)
 #   $3  — glob(s) of output files/dirs to copy back (space-separated, relative to scratch)
 #
 # Variables that expand at submission time (from this script): $1, SAMPLE_DIR, scratch_root
@@ -110,37 +123,28 @@ build_scratch_wrap() {
   local input_mode="$2"
   local copy_back_globs="$3"
 
-  # -- copy inputs to scratch --
+  # -- resolve inputs (read from NFS) and point output at scratch --
   local stage_inputs=""
   case "$input_mode" in
     fastq)
-      # FASTQs are read-only references; no copy needed.
       # Script 01 uses `find .` for FASTQ discovery, so it must run from SAMPLE_DIR.
-      # Output goes to scratch; sort BAMs are copied back by the copy-back section.
+      # FASTQs read in place; output (BAMs) goes to scratch, copied back below.
       stage_inputs="cd '${SAMPLE_DIR}'
 SCRIPT_ARGS=('${SAMPLE_DIR}' \"\$SCRATCH_JOB\")"
       ;;
     sort_bams)
       stage_inputs="
-# Copy *.sort.bam + .bai to scratch; build comma-separated input list
-mapfile -t _bams < <(find '${SAMPLE_DIR}' -maxdepth 1 \( -name '*.sort.bam' -o -name '*.sorted.bam' \) | sort)
-[[ \${#_bams[@]} -eq 0 ]] && { echo '<ERROR> No *.sort.bam files in ${SAMPLE_DIR}'; exit 1; }
-for _b in \"\${_bams[@]}\"; do
-  cp \"\$_b\" \"\$SCRATCH_JOB/\"
-  [[ -f \"\${_b}.bai\" ]] && cp \"\${_b}.bai\" \"\$SCRATCH_JOB/\"
-done
-_scratch_list=\$(find \"\$SCRATCH_JOB\" -maxdepth 1 \( -name '*.sort.bam' -o -name '*.sorted.bam' \) | sort | paste -sd,)
-SCRIPT_ARGS=(\"\$_scratch_list\" \"\$SCRATCH_JOB\")"
+# Read *.sort.bam directly from NFS; output to scratch
+_nfs_list=\$(find '${SAMPLE_DIR}' -maxdepth 1 \( -name '*.sort.bam' -o -name '*.sorted.bam' \) | sort | paste -sd,)
+[[ -z \"\$_nfs_list\" ]] && { echo '<ERROR> No *.sort.bam files in ${SAMPLE_DIR}'; exit 1; }
+SCRIPT_ARGS=(\"\$_nfs_list\" \"\$SCRATCH_JOB\")"
       ;;
     bqsr_bam)
       stage_inputs="
-# Copy *.bqsr.bam + .bai to scratch
+# Read *.bqsr.bam directly from NFS; output to scratch
 _bqsr=\$(find '${SAMPLE_DIR}' -maxdepth 1 -name '*.rmdup.mqfilt.bqsr.bam' | head -1)
 [[ -z \"\$_bqsr\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
-cp \"\$_bqsr\" \"\$SCRATCH_JOB/\"
-[[ -f \"\${_bqsr}.bai\" ]] && cp \"\${_bqsr}.bai\" \"\$SCRATCH_JOB/\"
-_scratch_bam=\"\$SCRATCH_JOB/\$(basename \"\$_bqsr\")\"
-SCRIPT_ARGS=(\"\$_scratch_bam\" \"\$SCRATCH_JOB\")"
+SCRIPT_ARGS=(\"\$_bqsr\" \"\$SCRATCH_JOB\")"
       ;;
   esac
 
