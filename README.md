@@ -65,9 +65,11 @@ FASTQ reads
 | 02a | `02a_bqsr_evaluate.sh` | Functional |
 | 03a | `03_gatk_haplotype_caller.sh` | Functional |
 | 03b | `03_glimpse2_imputation.sh` | **Paused** — reference chunks not yet generated |
-| 04 | `04_gatk_GenomicsDB_import.sh` | Stub |
+| 04 | `04_gatk_GenomicsDB_import.sh` | **Beta** — implemented, local tests pass, FENIX validation pending |
 | 05 | `05_gatk_GenotypeGVCFs.sh` | Stub |
 | 06 | `06_gatk_vqsr.sh` | Stub |
+
+See [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md) for the full status report and [docs/S04_GenomicsDBImport_design.md](docs/S04_GenomicsDBImport_design.md) for Step 04 design notes.
 
 Steps 03a and 03b are alternatives — choose based on coverage depth. Steps 04–06 feed from 03a output.
 

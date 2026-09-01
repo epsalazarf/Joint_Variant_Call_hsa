@@ -14,7 +14,7 @@ bin/
 ├── 02_gatk_bam_qc_workflow.sh      # Step 02 — BAM QC + BQSR
 ├── 03_gatk_haplotype_caller.sh     # Step 03a — HaplotypeCaller (standard coverage)
 ├── 03_glimpse2_imputation.sh       # Step 03b — GLIMPSE2 imputation (low-coverage)
-├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (stub)
+├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (beta)
 ├── 05_gatk_GenotypeGVCFs.sh        # Step 05 — Joint genotyping (stub)
 ├── 06_gatk_vqsr.sh                 # Step 06 — VQSR filtering (stub)
 └── supp/
@@ -253,17 +253,85 @@ Config keys required (`config/config.yaml`):
 
 ---
 
-## Steps 04–06 — Joint Genotyping and Filtering (stubs)
+## Step 04 — GenomicsDB Import (cohort-level)
 
-These scripts are scaffolded but not yet implemented.
+Consolidates the per-chromosome GVCFs from Step 03a into GenomicsDB workspaces,
+**one per chromosome**, for joint genotyping. This is a cohort step: run it once
+for the whole set of samples you want genotyped together.
+
+> **Beta** — local tests pass; not yet validated on FENIX with real data.
+> See [docs/S04_GenomicsDBImport_design.md](docs/S04_GenomicsDBImport_design.md).
+
+### 1. Build the sample map
+
+A 2-column, TAB-separated file — one line per sample:
+
+```
+LUPUS001	/mnt/data/amedina/esalazarf/lupus/LUPUS001/chrom_gvcf
+LUPUS002	/mnt/data/amedina/esalazarf/lupus/LUPUS002/chrom_gvcf
+```
+
+Column 2 is the `chrom_gvcf/` directory produced by Step 03a. Generate it from a
+cohort directory that holds one sub-directory per sample:
+
+```bash
+cd /path/to/cohort
+for d in */chrom_gvcf; do
+  s=$(basename "$(dirname "$d")")
+  printf '%s\t%s\n' "$s" "$(readlink -f "$d")"
+done > cohort.sample_map.tsv
+```
+
+Always eyeball the file before launching. Lines that are blank or start with `#`
+are ignored.
+
+### 2. Run (single chromosome — start here for testing)
+
+```bash
+bash bin/04_gatk_GenomicsDB_import.sh cohort.sample_map.tsv <output_path> chr22 create
+```
+
+| Argument | Meaning |
+|----------|---------|
+| `sample_map` | the TSV from step 1 |
+| `output_path` | workspaces are created at `<output_path>/genomicsdb/<chrom>` |
+| `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` |
+| `action` | `create` (default) \| `update` |
+
+`autosomes` / `all` process every chromosome **serially in one process** — fine
+for tests and small cohorts. A per-chromosome SLURM launcher will come later.
+
+### 3. Adding samples later (waves)
+
+```bash
+# first wave
+bash bin/04_gatk_GenomicsDB_import.sh wave1.sample_map.tsv <out> chr22 create
+# later wave — only the NEW samples in this map
+bash bin/04_gatk_GenomicsDB_import.sh wave2.sample_map.tsv <out> chr22 update
+```
+
+### Output
+
+| Path | Description |
+|------|-------------|
+| `<output_path>/genomicsdb/<CHR>/` | GenomicsDB workspace (input for Step 05 as `gendb://...`) |
+
+The workspace is built on `/scratch` (when available) and copied back on
+success.
+
+---
+
+## Steps 05–06 — Joint Genotyping and Filtering (stubs)
+
+Not yet implemented; on hold until Step 04 is validated on FENIX.
 
 | Step | Script | Purpose |
 |------|--------|---------|
-| 04 | `bin/04_gatk_GenomicsDB_import.sh` | Import per-sample GVCFs into GenomicsDB |
-| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | Joint genotyping across all samples |
-| 06 | `bin/06_gatk_vqsr.sh` | VQSR filtering of joint VCF |
+| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | Joint genotyping across all samples (`gendb://` per chromosome) |
+| 06 | `bin/06_gatk_vqsr.sh` | VQSR (or hard-filter) of the joint VCF — **needs new config keys for VQSR resources** |
 
-Do not use these for production runs. Watch for status updates in the pipeline overview table in [README.md](README.md).
+Do not use these for production runs. Watch the pipeline overview table in
+[README.md](README.md) and [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md).
 
 ---
 

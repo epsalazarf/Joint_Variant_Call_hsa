@@ -127,6 +127,16 @@ docker-compose.yml
 *.xlsx
 *.txt
 
+# ...but keep hand-written documentation under docs/
+!docs/*.md
+!docs/pipeline_review_notes.txt
+
+# test harness: keep the scripts + input list, ignore generated run artifacts
+!test/**
+test/**/logs/
+test/**/out/
+test/**/*.sample_map.tsv
+
 # Large datasets (potentially generated or downloaded)
 *.tar
 *.gz

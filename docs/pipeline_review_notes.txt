@@ -1,0 +1,185 @@
+===============================================================================
+ PIPELINE REVIEW NOTES  —  Joint Variant Calling Pipeline [FENIX]
+ Kept for future guidance. Not auto-generated; update by hand as items are
+ resolved. Last touched: 2026-08-31 (during S04 GenomicsDBImport implementation)
+===============================================================================
+
+Guiding philosophy (per maintainer, 2026-08-31):
+  * The pipeline must be runnable by students / labmates who are NOT trained
+    bioinformaticians. Prefer explicit inputs, loud errors, and copy-paste
+    command blocks over clever implicit behaviour.
+  * Finish the missing steps (04 -> 06) FIRST. Refactor the older scripts
+    (awkward slurmer invocation, etc.) only AFTER the chain is complete.
+  * On FENIX, balance performance against queue wait: request modest resources.
+    Oversized --mem / --cpus requests sit in the queue longer than the compute
+    they save.
+
+
+-------------------------------------------------------------------------------
+ 1. OPEN ISSUES / GAPS (act on these before the relevant step goes to prod)
+-------------------------------------------------------------------------------
+
+[S06 / config] VQSR resource files are NOT in config/config.yaml.
+    Step 06 (VQSR) needs, at minimum:
+      - HapMap 3.3 (SNP, truth+training)
+      - Omni 2.5 genotype array (SNP, truth+training)
+      - 1000G phase1 high-confidence SNPs (SNP, training)
+      - Mills & 1000G gold-standard indels (INDEL, truth+training)
+      - dbSNP (known; already present as ref_vars)
+    Add keys like ref_hapmap / ref_omni / ref_1kg_snp / ref_mills under both
+    remote: and local:. Decide download location on FENIX before coding S06.
+
+[S06] Cohort size decides VQSR vs hard-filtering.
+    GATK recommends hard-filtering (VariantFiltration) instead of VQSR when the
+    callset is small (rule of thumb: < ~30 exomes, or a single/very small WGS
+    cohort). The lupus cohort will grow, but early test runs will be tiny.
+    S06 should probably implement BOTH paths with a toggle, defaulting to the
+    safe one for the current cohort size.
+
+[S03b -> S04] GLIMPSE2 output does NOT feed GenomicsDBImport.
+    03_glimpse2_imputation.sh produces an already-genotyped, phased VCF (no
+    reference-confidence <NON_REF> blocks), one per chromosome. That is NOT a
+    GVCF and must not go through GenomicsDBImport -> GenotypeGVCFs.
+    Low-coverage / imputed samples are combined with `bcftools merge`, not GATK
+    joint genotyping. The README pipeline diagram currently implies 03b flows
+    into 04 — that is misleading. When 03b is un-paused, add a separate
+    "merge imputed samples" path rather than routing it through 04/05.
+    (S03b is PAUSED and not a priority as of 2026-08-31.)
+
+[config] Local reference is bgzipped (hg38.fa.gz); GATK -R rejects .gz.
+    config local: ref_gnm = "$HOME/Data/REFx/hg38.p14/hg38.fa.gz".
+    Several GATK tools (incl. GenomicsDBImport --reference, HaplotypeCaller)
+    require a plain .fa/.fasta with .fai + .dict. This only bites when running
+    steps 02/03/04 on a workstation; on FENIX ref_gnm is plain .fa so it works.
+    Fix: point local ref_gnm at an unzipped copy, or `bgzip -d` + reindex.
+
+[mito contig] chrM vs chrMT notation is inconsistent across the repo.
+    - hg38.fa (UCSC, FENIX) uses `chrM`.
+    - docs/canon_hgvs_to_chroms.hg38.txt maps NC_012920.1 -> `chrMT`.
+    - 03_gatk_haplotype_caller.sh step3 hardcodes `chrM` in its --regions list.
+    S04 now auto-detects which notation the GVCFs actually use and adapts
+    (workspace + interval follow the data, with a warning). Keep `chrM` as the
+    house standard; if any upstream data shows up as `chrMT`, S04 will still
+    work but will warn — chase down the source.
+
+[logging] INSTRUCTIONS.md claims "Each script writes a timestamped log to log/".
+    Scripts 02 / 03 / 04 do NOT self-log; they write to stdout and rely on the
+    SLURM --output file (or the PIPELINE launcher's log/ dir). Either add a
+    `tee`-based logger to the golden template, or fix the docs.
+
+
+-------------------------------------------------------------------------------
+ 2. THINGS TO IMPROVE IN OLDER SCRIPTS (deferred — after 04/05/06 land)
+-------------------------------------------------------------------------------
+
+[slurmers] The *_batch-slurmer.sh scripts have an unintuitive calling
+    convention (positional script path + input dir; the batch list is written
+    as a side effect into $PWD with a name derived from $PWD). Easy to point at
+    the wrong directory and flood the queue. Planned direction (maintainer,
+    2026-08-31): move to an explicit input LIST file, same idea as S04's
+    sample map. Add a comment block in each slurmer showing how to build the
+    list.
+
+[discovery] S02 / S03 batch discovery via `find <dir> -name '<suffix>'` silently
+    does nothing (or the wrong thing) when the path is off by one level. An
+    explicit list removes the class of "submitted 0 jobs / submitted 400 jobs"
+    mistakes.
+
+[naming] v1.2 output-naming change (SAMPLE.rmdup.* vs SAMPLE.sort.rmdup.*)
+    means pre-v1.2 outputs are not detected by the omni-skip. Document a
+    one-time rename helper, or make the skip logic tolerant of both.
+
+[template] archive/00_golden_template.sh is a getopts/colors style that none of
+    the real scripts follow. The de-facto template is 02/03/04's structure
+    (ARGUMENTS / ENVIRONMENT / FUNCTIONS / MAIN, stepN_* functions, [x] log
+    prefixes, dc timing). Either update the golden template to match reality or
+    drop it.
+
+
+-------------------------------------------------------------------------------
+ 3. FENIX ARCHITECTURE — WHAT WE LEARNED (carry into 04/05/06)
+-------------------------------------------------------------------------------
+
+[scratch] (Sept-2026 benchmark, see INSTRUCTIONS.md)
+    * Sequential, streaming GATK steps (MarkDuplicates, BQSR, HaplotypeCaller)
+      are CPU-bound. Staging their large read-once inputs to /scratch gives NO
+      wall-time benefit — it is pure copy-in overhead. Read those from NFS.
+    * ALWAYS route TMPDIR + tool temp (samtools sort -T, gatk --tmp-dir, Spark
+      local dir) to /scratch — that is the genuinely IOPS-heavy traffic.
+    * GenomicsDBImport is the OPPOSITE case: the TileDB workspace does lots of
+      small random reads/writes and should NOT live on NFS during the build.
+      S04 builds the workspace on /scratch and copies the finished product
+      back. This is a real benefit, not just quota hygiene.
+    * Write bulky transient intermediates to /scratch, copy only finals back —
+      keeps the group's persistent quota clean regardless of speed.
+
+[resourcing] Keep per-job requests modest so jobs schedule fast:
+    * S02  ~8 CPU / 32G   (MarkDuplicatesSpark heap + GC threads)
+    * S03  ~4 CPU / 32G   (--native-pair-hmm-threads 4, -Xmx20G)
+    * S04  ~4 CPU / 16G   (GenomicsDBImport: small Java heap ~8G, work is
+                            native/off-heap; --reader-threads 4)
+    * S05  (est.) ~2-4 CPU / 16-24G per chromosome, GenotypeGVCFs
+    * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
+    Scatter by chromosome and submit per-chrom jobs rather than one fat job.
+
+[java] FENIX needs an explicit `module unload oracle-java` then
+    `module load oracle-java/25.0.2` before `module load gatk` (see S03).
+    S04 does the same (guarded so it is harmless if already unloaded).
+
+[bash] FENIX bash is 5.x; scripts freely use `EPOCHSECONDS`. macOS ships bash
+    3.2, so local `bash script.sh` runs of 02/03/04 will trip on `set -u` +
+    EPOCHSECONDS and on associative arrays. S04 was written to avoid
+    `declare -A` (uses a space-delimited string for dedup) but still uses
+    EPOCHSECONDS for timing like its siblings. Local testing needs a newer
+    bash, or the timing lines stubbed.
+
+
+-------------------------------------------------------------------------------
+ 4. S04 GenomicsDBImport — DESIGN DECISIONS (implemented 2026-08-31)
+-------------------------------------------------------------------------------
+
+See docs/S04_GenomicsDBImport_design.md for the full rationale. Summary of the
+choices made with the maintainer:
+
+  1. Input contract  : explicit 2-column TSV sample map (label <TAB> chrom_gvcf
+                       dir). NOT directory auto-discovery — that was judged too
+                       easy to mis-point and flood the queue. A comment block
+                       in the script header shows how to generate the map.
+  2. Incremental      : fresh build by default; `update` as a 4th positional
+                       arg enables --genomicsdb-update-workspace-path for
+                       sample waves (lupus cohort will grow).
+  3. Scatter + gate   : one workspace per chromosome; selector arg accepts a
+                       single chrom | `autosomes` | `all`. Testing starts with
+                       chr22.
+  4. Scratch          : build on /scratch, copy workspace back to output (this
+                       step genuinely benefits — random-access I/O).
+  5. Mito notation    : `chrM` is the standard; auto-fallback to `chrMT` with a
+                       warning if the data uses that.
+  6. Engine           : committed to GenomicsDB (not CombineGVCFs) — cohorts
+                       only grow, and the incremental-update feature is the
+                       reason.
+
+  NOT yet built (deferred until S04 is proven on FENIX with real data):
+    * a GENDBI.seq_batch-slurmer.sh wrapper to scatter the per-chrom jobs
+      (S04 itself can loop chromosomes serially in one process for now).
+    * integration into bin/supp/run_pipeline.sh / PIPELINE.single_sample.sh
+      (S04 is a cohort-level step, not single-sample — needs its own launcher).
+
+  Added 2026-08-31 for the JAGUAR chr22 test (test/jaguar_chr22/):
+    * Truncation guard — S04 checks each GVCF for the BGZF EOF marker and warns
+      (GENDBI_STRICT_GVCF=true to hard-fail). GenomicsDBImport is ALL-OR-NOTHING
+      per invocation: one bad GVCF fails the entire wave, and none of that
+      wave's samples are imported. Earlier waves' workspace is untouched
+      (update works on a scratch copy).
+    * S04 knobs are now env-overridable (GENDBI_READER_THREADS default
+      $SLURM_CPUS_PER_TASK, GENDBI_BATCH_SIZE, GENDBI_JAVA_MEM) so a launcher
+      can vary resources per run.
+    * check_setup.sh flags the two known config problems automatically:
+      bgzipped ref_gnm (GATK -R rejects it) and a missing .dict.
+
+  JAGUAR test recovery note: the cohort has a truncated GVCF
+  (EGAN00004696518, ~24 KB vs ~48 MB median, lands in wave 3). Expected: wave 3
+  fails, waves 1-2 (62 samples) survive. Fix = re-run Step 03a for that sample,
+  then re-run wave 3 as `update`.
+
+===============================================================================
