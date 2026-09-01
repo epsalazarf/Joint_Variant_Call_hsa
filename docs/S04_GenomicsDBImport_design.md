@@ -119,17 +119,26 @@ GenomicsDB update path, so GenomicsDB it is — even for the first small test.
 
 ## FENIX resourcing
 
-GenomicsDBImport keeps a **small Java heap** (`-Xmx8G` remote / `4G` local) —
-most of the work is native/off-heap in TileDB. Suggested per-chromosome job:
+**Measured** — `seff 276894` (first wave-1 attempt: 31 samples, chr22, `create`,
+8 cores / 32 GB):
+
+| metric | value | reading |
+|--------|-------|---------|
+| CPU efficiency | 9.53% | ~0.76 core busy over 72 min wall — effectively serial + I/O-bound |
+| Memory used | 6.68 GB / 32 GB | heap need is small; most is native TileDB |
+| Wall clock | 72 min | dominated by the tail `Consolidating GenomicsDB array` step |
+
+GenomicsDBImport for a single interval does not parallelise usefully (the
+consolidate step is serial; the rest is NFS read + BeeGFS write). **Extra cores
+and RAM do not shorten it.** Suggested per-chromosome job:
 
 ```
---cpus-per-task=4   --mem=16G   --time=<scale to cohort size / contig length>
+--cpus-per-task=2   --mem=16G   --time=<scale with contig size; ~1.5 h for chr22>
 ```
 
-`--reader-threads 4`, `--batch-size 50` (imports all samples at once below 50;
-caps open file handles / memory above that), `--consolidate`,
-`--genomicsdb-shared-posixfs-optimizations true` (helps on the shared
-filesystem during the copy-back read).
+Java `-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`, `--batch-size 50`
+(imports all samples at once below 50; caps open file handles / memory above
+that), `--consolidate`, `--genomicsdb-shared-posixfs-optimizations true`.
 
 ---
 

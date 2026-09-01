@@ -39,15 +39,19 @@ DEFAULT_OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag2
 # --- per-wave resource envelope (edit here) --------------------------------------
 #            wave:      1        2         3
 WAVE_ACTION=( -    create   update    update  )
-WAVE_CPUS=(   -    8        8         16      )   # --cpus-per-task
-WAVE_MEM=(    -    32G      64G       128G    )   # --mem
-WAVE_TIME=(   -    12:00:00 24:00:00  48:00:00)   # --time
-WAVE_RTHREADS=(-   8        8         16      )   # GENDBI_READER_THREADS
+WAVE_CPUS=(   -    2        2         4       )   # --cpus-per-task
+WAVE_MEM=(    -    16G      16G       16G     )   # --mem
+WAVE_TIME=(   -    6:00:00  6:00:00   8:00:00 )   # --time
+WAVE_RTHREADS=(-   2        2         4       )   # GENDBI_READER_THREADS
 WAVE_BATCH=(  -    50       50        100     )   # GENDBI_BATCH_SIZE
 N_WAVES=3
-# NOTE: GenomicsDBImport keeps a small Java heap; big --mem is intentional
-# head-room for the experiment, not a real requirement. The group tolerates
-# large asks (ref: ADMIXTURE at 8 CPU / 192G / 96h scheduled without delay).
+# Sizing from `seff 276894` (wave-1 first attempt, 31 samples / chr22):
+#   8 cores -> CPU efficiency 9.53% (~0.76 core busy over 72 min wall);
+#   6.68 GB RAM used of 32 GB. GenomicsDBImport for one interval is effectively
+#   serial (the tail `Consolidating` step especially) + I/O-bound, so extra
+#   cores/RAM do not shorten it. Waves are now small; wave 3 keeps 4 cores only
+#   as a last confirmation that more does not help. Adjust `--time` up for
+#   larger chromosomes (chr22 is the smallest autosome).
 
 # =============================================================================
 

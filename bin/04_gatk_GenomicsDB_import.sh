@@ -66,10 +66,12 @@
 #  FENIX resourcing (per-chromosome job)
 # ---------------------------------------------------------------------------
 #
-#   GenomicsDBImport is light on Java heap (most work is native/off-heap) and
-#   only mildly parallel. Modest requests keep jobs out of the queue backlog:
+#   MEASURED (seff 276894: 31 samples, chr22, 8 cores): CPU efficiency 9.53%,
+#   6.68 GB RAM, 72 min wall. For one interval GenomicsDBImport is effectively
+#   serial (the tail `Consolidating` step) + I/O-bound — extra cores/RAM do not
+#   help. Request small; scale --time with contig size:
 #
-#     --cpus-per-task=4   --mem=16G   (--time scaled to cohort size / contig)
+#     --cpus-per-task=2   --mem=16G   (-Xmx6g; ~1.5 h for chr22, the smallest)
 #
 #   The TileDB workspace does many small random reads/writes — bad on NFS — so
 #   this script builds it on /scratch when available and copies the finished
@@ -138,12 +140,12 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 
 # Options (env-overridable so a launcher can vary resources per run)
 #   GENDBI_READER_THREADS  — GenomicsDBImport --reader-threads
-#                            (default: $SLURM_CPUS_PER_TASK, else 4)
+#                            (default: $SLURM_CPUS_PER_TASK, else 2)
 #   GENDBI_BATCH_SIZE      — GenomicsDBImport --batch-size            (default 50)
-#   GENDBI_JAVA_MEM        — Java -Xms/-Xmx                (default 8G remote / 4G local)
+#   GENDBI_JAVA_MEM        — Java -Xms/-Xmx                (default 6G remote / 4G local)
 #   GENDBI_STRICT_GVCF     — true: abort on a GVCF that looks truncated;
 #                            false (default): warn and keep it in the cohort
-njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-4}}"
+njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"
 TRUNCATED_SEEN=""   # labels of samples whose GVCF looked truncated (warn mode)
@@ -155,7 +157,7 @@ CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 # Detect environment
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
   env_type="remote"
-  MEM="${GENDBI_JAVA_MEM:-8G}"
+  MEM="${GENDBI_JAVA_MEM:-6G}"   # seff 276894: whole job used 6.68 GB RSS; heap need is small
 else
   env_type="local"
   MEM="${GENDBI_JAVA_MEM:-4G}"

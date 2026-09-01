@@ -116,11 +116,23 @@ Guiding philosophy (per maintainer, 2026-08-31):
 [resourcing] Keep per-job requests modest so jobs schedule fast:
     * S02  ~8 CPU / 32G   (MarkDuplicatesSpark heap + GC threads)
     * S03  ~4 CPU / 32G   (--native-pair-hmm-threads 4, -Xmx20G)
-    * S04  ~4 CPU / 16G   (GenomicsDBImport: small Java heap ~8G, work is
-                            native/off-heap; --reader-threads 4)
+    * S04  ~2 CPU / 16G   (-Xmx6g). MEASURED: seff 276894 (31 samples, chr22,
+                            8 cores) -> CPU efficiency 9.53%, 6.68 GB RAM.
+                            GenomicsDBImport for one interval is effectively
+                            SERIAL (esp. the tail `Consolidating` step) and
+                            I/O-bound (reads GVCFs from NFS, writes TileDB to
+                            scratch). Extra cores/RAM do NOT shorten it.
+                            --reader-threads 2 is plenty; scale --time with
+                            chromosome size (72 min for chr22, the smallest).
     * S05  (est.) ~2-4 CPU / 16-24G per chromosome, GenotypeGVCFs
     * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
     Scatter by chromosome and submit per-chrom jobs rather than one fat job.
+
+[slurm accounting] seff 276894 shows User/Group esalazarf/fsanchezq — the job's
+    accounting group was fsanchezq (paleogenomics), not amedina, even though it
+    wrote to /scratch/groups/amedina and reads /mnt/data/amedina. It worked, but
+    be aware the default SLURM account may not match the data group; may matter
+    for scratch quota. Check `sacctmgr show assoc user=$USER` if scratch fills.
 
 [java] FENIX needs an explicit `module unload oracle-java` then
     `module load oracle-java/25.0.2` before `module load gatk` (see S03).

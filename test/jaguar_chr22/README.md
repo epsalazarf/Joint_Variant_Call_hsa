@@ -6,13 +6,17 @@ incremental (`update`) path twice.
 
 | Wave | Action | Samples | First … last | SLURM (CPU / mem / time) | reader-threads / batch |
 |------|--------|---------|--------------|--------------------------|------------------------|
-| 1 | `create` | 31 | EGAN00004552304 … EGAN00004552334 | 8 / 32G / 12h | 8 / 50 |
-| 2 | `update` | 31 | EGAN00004552335 … EGAN00004696501 | 8 / 64G / 24h | 8 / 50 |
-| 3 | `update` | 31 | EGAN00004696502 … EGAN00004710984 | 16 / 128G / 48h | 16 / 100 |
+| 1 | `create` | 31 | EGAN00004552304 … EGAN00004552334 | 2 / 16G / 6h | 2 / 50 |
+| 2 | `update` | 31 | EGAN00004552335 … EGAN00004696501 | 2 / 16G / 6h | 2 / 50 |
+| 3 | `update` | 31 | EGAN00004696502 … EGAN00004710984 | 4 / 16G / 8h | 4 / 100 |
 
-Wave 3 deliberately doubles wave 2's CPU + RAM so we can see whether more
-resources actually shorten GenomicsDBImport (mostly-native, mildly parallel —
-this is the experiment, not a real requirement). Big `--mem` is head-room only.
+**Resource experiment — mostly already answered.** `seff 276894` (the first
+wave-1 attempt at 8 cores / 32 GB) reported **CPU efficiency 9.53%** and
+**6.68 GB** RAM used over 72 min. GenomicsDBImport for one interval is
+effectively serial (the tail `Consolidating` step) and I/O-bound, so more
+cores/RAM don't shorten it. Waves are now small; wave 3 keeps 4 cores purely as
+a final confirmation. `run_jaguar_waves.sh report` will show whether even that
+made a difference.
 
 ### Known bad sample (left in on purpose)
 
