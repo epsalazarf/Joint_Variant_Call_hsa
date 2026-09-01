@@ -12,6 +12,8 @@
 # Usage       : 04_gatk_GenomicsDB_import.sh <sample_map> <output_path> <chrom> [action]
 #             : sample_map  — TSV, 2 columns: <sample_label> <TAB> <chrom_gvcf_dir>
 #             : output_path — workspaces are created at <output_path>/genomicsdb/<chrom>
+#             :               MUST be group storage (/mnt/data/...), never $HOME
+#             :               (FENIX home quota ~5 GB); the script refuses a $HOME path
 #             : chrom       — chr1..chr22 | chrX | chrY | chrM | autosomes | all
 #             : action      — create (default) | update
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
@@ -113,6 +115,27 @@ echo "[<]  Sample map : $SAMPLE_MAP  ($n_samples samples)"
 echo "[i]  Output     : ${OUTPUT_PATH}/genomicsdb/<chrom>"
 echo "[i]  Action     : ${ACTION}"
 
+# Guard: the finished workspace is copied back to OUTPUT_PATH. A home directory
+# on FENIX has a hard ~5 GB quota — a per-chromosome workspace for a real cohort
+# will blow through it and the copy-back fails AFTER the (long) import. Refuse a
+# home-dir output, and do a real write test on the target filesystem.
+case "$OUTPUT_PATH/" in
+  "${HOME}"/*)
+    echo "[X]  CANCELLED. Output is under \$HOME (${HOME}) — home has a hard quota on FENIX."
+    echo "[i]  Point it at group storage, e.g. /mnt/data/amedina/${USER}/JVCdev/<name>"
+    exit 1 ;;
+esac
+if ! { mkdir -p "$OUTPUT_PATH/genomicsdb" && _wt="$OUTPUT_PATH/genomicsdb/.writetest.$$" \
+       && dd if=/dev/zero of="$_wt" bs=1M count=64 status=none 2>/dev/null; }; then
+  rm -f "${_wt:-}" 2>/dev/null || true
+  echo "[X]  CANCELLED. Cannot write ~64 MB to ${OUTPUT_PATH}/genomicsdb (quota or permissions)."
+  df -h "$OUTPUT_PATH" 2>/dev/null | sed 's/^/[i]    /'
+  exit 1
+fi
+rm -f "$_wt"
+avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
+[ -n "${avail_kb:-}" ] && echo "[i]  Output free : $(( avail_kb / 1024 )) MB on $(df -Ph "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $6}')"
+
 # Options (env-overridable so a launcher can vary resources per run)
 #   GENDBI_READER_THREADS  — GenomicsDBImport --reader-threads
 #                            (default: $SLURM_CPUS_PER_TASK, else 4)
@@ -183,8 +206,29 @@ else
 fi
 mkdir -p "$SCRATCH_BASE/tmp" "$SCRATCH_BASE/gdb" "$SCRATCH_BASE/maps"
 export TMPDIR="$SCRATCH_BASE/tmp"
-trap 'rm -rf "$SCRATCH_BASE"' EXIT
 echo "[i]  Scratch    : ${USE_SCRATCH}  (${SCRATCH_BASE})"
+
+# Cleanup: wipe scratch on success. On failure, KEEP it only if GenomicsDBImport
+# actually produced a workspace there (so a copy-back failure — e.g. quota — does
+# not throw away the expensive compute; the finisher prints how to recover).
+GDB_BUILT=false
+cleanup() {
+  local rc=$?
+  if (( rc != 0 )) && [[ "$GDB_BUILT" == true && -d "$SCRATCH_BASE/gdb" ]] \
+       && find "$SCRATCH_BASE/gdb" -name callset.json -print -quit 2>/dev/null | grep -q .; then
+    echo
+    echo "[!]  Exited $rc AFTER GenomicsDBImport succeeded — scratch workspace PRESERVED:"
+    echo "[!]    $SCRATCH_BASE/gdb"
+    echo "[!]  Recover WITHOUT recomputing, once the destination has room:"
+    echo "[!]    mkdir -p '${OUTPUT_PATH}/genomicsdb'"
+    echo "[!]    cp -r '$SCRATCH_BASE/gdb/'* '${OUTPUT_PATH}/genomicsdb/'"
+    echo "[!]    bash '$0' '$SAMPLE_MAP' '$OUTPUT_PATH' '$CHROM_ARG' create   # verifies + finishes"
+    echo "[!]  (scratch auto-purges after a few days — copy it out soon)"
+  else
+    rm -rf "$SCRATCH_BASE"
+  fi
+}
+trap cleanup EXIT
 
 # <\ENV> --------------------------------------------------------------------
 
@@ -363,6 +407,8 @@ import_one_chrom() {
   fi
 
   # --- run GenomicsDBImport ---
+  # (JDK-25 "restricted method" / sun.misc.Unsafe warnings from GATK 4.6's native
+  #  libs are harmless — GATK 4.6 targets JDK 17. Not worth extra --java-options.)
   set -o xtrace
   gatk --java-options "-Xms${MEM} -Xmx${MEM}" GenomicsDBImport \
     --sample-name-map "$map" \
@@ -378,17 +424,32 @@ import_one_chrom() {
 
   [[ -s "${ws_work}/callset.json" && -s "${ws_work}/vidmap.json" ]] \
     || { echo "[X]  CANCELLED: GenomicsDBImport failed for ${chr}, workspace incomplete: ${ws_work}"; exit 1; }
+  GDB_BUILT=true   # from here on, a failure must not throw away the scratch workspace
 
   # --- copy finished workspace back (stage via .new, then swap) ---
+  local ws_bytes ws_avail_kb
+  ws_bytes=$(du -sk "$ws_work" 2>/dev/null | awk '{print $1}')
   mkdir -p "${OUTPUT_PATH}/genomicsdb"
+  ws_avail_kb=$(df -Pk "${OUTPUT_PATH}/genomicsdb" 2>/dev/null | awk 'NR==2{print $4}')
+  echo "[i]  Workspace ${chr}: ~$(( ${ws_bytes:-0} / 1024 )) MB to copy back; ~$(( ${ws_avail_kb:-0} / 1024 )) MB free at destination"
+  if [[ -n "${ws_bytes:-}" && -n "${ws_avail_kb:-}" ]] && (( ws_bytes + ws_bytes/10 > ws_avail_kb )); then
+    echo "[X]  CANCELLED: not enough room at ${OUTPUT_PATH}/genomicsdb for the ${chr} workspace."
+    echo "[!]  GenomicsDBImport already succeeded — recover from scratch (see below), do NOT recompute."
+    exit 1
+  fi
+
   local ws_new="${OUTPUT_PATH}/genomicsdb/.${chr}.new.$$"
   rm -rf "$ws_new"
-  cp -r "$ws_work" "$ws_new"
+  if ! cp -r "$ws_work" "$ws_new"; then
+    rm -rf "$ws_new"
+    echo "[X]  CANCELLED: copy-back failed for ${chr} (quota/space/permissions)."
+    exit 1
+  fi
   rm -rf "$ws_final"
   mv "$ws_new" "$ws_final"
   rm -rf "$ws_work"
 
-  [[ -s "${ws_final}/callset.json" ]] || { echo "[X]  CANCELLED: copy-back failed for ${chr}: ${ws_final}"; exit 1; }
+  [[ -s "${ws_final}/callset.json" ]] || { echo "[X]  CANCELLED: copy-back verification failed for ${chr}: ${ws_final}"; exit 1; }
   local n_this; n_this="$(grep -cvE '^[[:space:]]*$' "$map" || true)"
   echo "[>]  ${ws_final}"
   echo "[!]  Chromosome ${chr} — ${ACTION} done (${n_this} samples $( [[ "$ACTION" == update ]] && echo "added" || echo "imported" ))"

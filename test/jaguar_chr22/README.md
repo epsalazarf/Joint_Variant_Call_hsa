@@ -71,7 +71,9 @@ squeue -u $USER --name=JVC-GDBI-w1,JVC-GDBI-w2,JVC-GDBI-w3
 bash test/jaguar_chr22/run_jaguar_waves.sh report
 ```
 
-Output workspace: `test/jaguar_chr22/out/genomicsdb/chr22/` (consumed later by Step 05).
+Output workspace: `/mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22/genomicsdb/chr22/`
+(group storage — **never** the repo/`$HOME`; consumed later by Step 05).
+Wave maps + SLURM logs stay in `test/jaguar_chr22/` (tiny, git-ignored).
 
 ## What success looks like
 
@@ -84,6 +86,23 @@ Output workspace: `test/jaguar_chr22/out/genomicsdb/chr22/` (consumed later by S
 - `run_jaguar_waves.sh report` shows `Elapsed` / `TotalCPU` / `MaxRSS` per wave —
   compare wave 2 vs wave 3 to judge whether the extra CPUs/RAM helped.
 
-First run: jobs 276894 / 276895 / 276896 submitted 2026-08-31, chained on
-`afterok`. `check_setup.sh` passed all checks on FENIX (gatk 4.6.2.0,
-oracle-java 25, `/scratch/groups/amedina` on BeeGFS).
+### First run (2026-08-31) — failed on quota, fixed
+
+Jobs 276894/276895/276896. Wave 1's GenomicsDBImport **succeeded** (72 min on
+scratch) but the copy-back went to `<repo>/test/jaguar_chr22/out`, and the repo
+is in `$HOME` on FENIX (hard ~5 GB quota) → `Disk quota exceeded`, and the old
+trap wiped scratch. Fixed:
+
+- output now defaults to `/mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22`
+  (group storage); `run_jaguar_waves.sh` and `check_setup.sh` both refuse a
+  `$HOME` output and do a real write-test.
+- S04 refuses a `$HOME` output, checks free space before the copy, and if the
+  import succeeded but copy-back fails it **keeps the scratch workspace** and
+  prints the `cp` + re-run commands to finish without recomputing.
+
+Before re-running: `rm -rf ~/GitHub/lambda/Joint_Variant_Call_hsa/test/jaguar_chr22/out`
+(leftover partial copy), then `git pull` and start again — wave 1 must redo the
+72 min (last night's scratch was already purged).
+
+The JDK-25 warnings in the log (`System::load` restricted method, `sun.misc.Unsafe`)
+are harmless — GATK 4.6 targets JDK 17.

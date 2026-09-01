@@ -294,7 +294,7 @@ bash bin/04_gatk_GenomicsDB_import.sh cohort.sample_map.tsv <output_path> chr22 
 | Argument | Meaning |
 |----------|---------|
 | `sample_map` | the TSV from step 1 |
-| `output_path` | workspaces are created at `<output_path>/genomicsdb/<chrom>` |
+| `output_path` | workspaces created at `<output_path>/genomicsdb/<chrom>` — **use group storage (`/mnt/data/...`), never `$HOME`** (FENIX home has a ~5 GB quota; the script refuses a `$HOME` path) |
 | `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` |
 | `action` | `create` (default) \| `update` |
 

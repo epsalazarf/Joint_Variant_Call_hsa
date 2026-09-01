@@ -16,7 +16,7 @@ set -uo pipefail   # NOT -e: we want to run every check and tally at the end
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 MAPS_DIR="${1:-$HERE}"
-OUTPUT_DIR="${2:-$HERE/out}"
+OUTPUT_DIR="${2:-/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag22}"
 
 S04="$REPO/bin/04_gatk_GenomicsDB_import.sh"
 CONFIG="$REPO/config/config.yaml"
@@ -155,10 +155,22 @@ fi
 
 # --- output dir + space -------------------------------------------------------
 hd "Output location + free space"
-mkdir -p "$OUTPUT_DIR" 2>/dev/null && P "output dir writable: $OUTPUT_DIR" || F "cannot create output dir: $OUTPUT_DIR"
+case "$OUTPUT_DIR/" in
+  "${HOME}"/*) F "output_dir is under \$HOME ($HOME) — FENIX home has a hard ~5 GB quota; the copy-back WILL fail after the ~1 h import. Use group storage (/mnt/data/amedina/$USER/...)." ;;
+esac
+if mkdir -p "$OUTPUT_DIR/genomicsdb" 2>/dev/null && \
+   dd if=/dev/zero of="$OUTPUT_DIR/genomicsdb/.writetest.$$" bs=1M count=64 status=none 2>/dev/null; then
+  P "output dir writable (64 MB test ok): $OUTPUT_DIR"
+  rm -f "$OUTPUT_DIR/genomicsdb/.writetest.$$"
+else
+  rm -f "$OUTPUT_DIR/genomicsdb/.writetest.$$" 2>/dev/null || true
+  F "cannot write 64 MB to $OUTPUT_DIR/genomicsdb (quota / permissions)"
+fi
 if [[ -e "$OUTPUT_DIR/genomicsdb/$CHROM/callset.json" ]]; then
   W "genomicsdb/$CHROM already exists — wave 1 (create) will SKIP it; delete it for a clean first run"
 fi
+avail_g=$(df -Pk "$OUTPUT_DIR" 2>/dev/null | awk 'NR==2{print int($4/1048576)}')
+[[ -n "${avail_g:-}" ]] && { (( avail_g >= 5 )) && P "output fs has ~${avail_g} G free" || W "output fs only ~${avail_g} G free — a full-cohort per-chrom workspace can be several GB"; }
 df -h "$OUTPUT_DIR" 2>/dev/null | awk 'NR==1||NR==2{print "        "$0}'
 [[ -n "${scratch_root:-}" && -d "${scratch_root:-/nonexistent}" ]] && df -h "$scratch_root" 2>/dev/null | awk 'NR==2{print "        scratch: "$0}'
 

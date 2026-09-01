@@ -190,6 +190,30 @@ choices made with the maintainer:
       re-import with action=update (GenomicsDB keeps the newer copy).
   First run jobs: 276894 (w1) / 276895 (w2) / 276896 (w3), chained afterok.
 
+  FIRST RUN FAILED (quota) — fixed 2026-09-01:
+  * Root cause: run_jaguar_waves.sh defaulted OUTPUT_DIR to <repo>/test/jaguar_chr22/out,
+    and the repo lives in $HOME on FENIX (hard ~5 GB quota). GenomicsDBImport
+    SUCCEEDED (71.96 min) building on scratch, then the copy-back to the home
+    dir failed "Disk quota exceeded" on every .tdb file. The old EXIT trap then
+    wiped scratch unconditionally -> 72 min of compute lost.
+  * Fixes in S04:
+    - refuse an OUTPUT_PATH under $HOME; 64 MB write-test on the target before
+      the (long) GATK call; pre-copy check of workspace size vs df free space.
+    - cleanup trap now PRESERVES the scratch workspace when GenomicsDBImport
+      succeeded but a later step failed, and prints the exact cp + re-run
+      commands to finish without recomputing (GDB_BUILT flag).
+  * Fixes in the launcher / checker:
+    - run_jaguar_waves.sh DEFAULT_OUTPUT_DIR = /mnt/data/amedina/$USER/JVCdev/
+      test_gendbi_jag22 (group storage); both it and check_setup.sh now FAIL on
+      a $HOME output and do a real write-test + free-space check.
+  * GENERAL RULE for the whole pipeline: the FENIX repo checkout is in $HOME
+    (5 GB quota). No step may write bulk output under the repo / $HOME —
+    always group storage (/mnt/data) or scratch. Carry into S05/S06 and the
+    pipeline-wide checker (section 5).
+  * The JDK-25 warnings in the log (java.lang.System::load restricted method,
+    sun.misc.Unsafe::arrayBaseOffset) are HARMLESS — GATK 4.6 targets JDK 17
+    and the pipeline loads oracle-java/25. Not worth patching --java-options.
+
 
 -------------------------------------------------------------------------------
  5. FUTURE TASKS

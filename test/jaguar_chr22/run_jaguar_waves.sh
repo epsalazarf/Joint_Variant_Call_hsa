@@ -18,7 +18,10 @@
 #
 #     cohort_root — dir containing bam/<SAMPLE>/chrom_gvcf/...
 #                   default: /mnt/data/amedina/mramirezc/JAGUAR_JVC  (FENIX)
-#     output_dir  — where genomicsdb/chr22 is built (default: ./out next to script)
+#     output_dir  — where genomicsdb/chr22 is built.  MUST be on group storage,
+#                   NOT under $HOME (FENIX home has a hard ~5 GB quota — the
+#                   copy-back of a real workspace will overflow it AFTER the
+#                   ~1 h import). Default below points at the JVCdev test area.
 # =============================================================================
 
 set -euo pipefail
@@ -29,6 +32,9 @@ S04="$REPO/bin/04_gatk_GenomicsDB_import.sh"
 CHROM="chr22"
 MAPS_DIR="$HERE"
 LOG_DIR="$HERE/logs"
+
+# Persistent output — group storage, never $HOME. Override with arg 2.
+DEFAULT_OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag22"
 
 # --- per-wave resource envelope (edit here) --------------------------------------
 #            wave:      1        2         3
@@ -66,7 +72,7 @@ DRY=false
 if [[ "${1:-}" == "--dry-run" ]]; then DRY=true; shift; fi
 
 COHORT_ROOT="${1:-/mnt/data/amedina/mramirezc/JAGUAR_JVC}"   # JAGUAR test default
-OUTPUT_DIR="${2:-$HERE/out}"
+OUTPUT_DIR="${2:-$DEFAULT_OUTPUT_DIR}"
 
 [[ -f "$S04" ]] || { echo "[X]  Step 04 script not found: $S04"; exit 1; }
 [[ -d "$COHORT_ROOT" ]] || { echo "[X]  cohort_root not a directory: $COHORT_ROOT"; exit 1; }
@@ -74,6 +80,15 @@ COHORT_ROOT="$(readlink -f "$COHORT_ROOT")"
 $DRY || command -v sbatch >/dev/null || { echo "[X]  sbatch not found"; exit 1; }
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 OUTPUT_DIR="$(readlink -f "$OUTPUT_DIR")"
+
+# Never build the workspace under $HOME — FENIX home has a hard ~5 GB quota and
+# the copy-back would fail after the ~1 h import (S04 also guards this).
+case "$OUTPUT_DIR/" in
+  "${HOME}"/*)
+    echo "[X]  output_dir is under \$HOME ($HOME) — FENIX home has a hard quota."
+    echo "[i]  Pass a group-storage path as arg 2, or edit DEFAULT_OUTPUT_DIR."
+    exit 1 ;;
+esac
 
 # maps: build if absent
 need_maps=false
