@@ -128,11 +128,14 @@ Guiding philosophy (per maintainer, 2026-08-31):
     * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
     Scatter by chromosome and submit per-chrom jobs rather than one fat job.
 
-[slurm accounting] seff 276894 shows User/Group esalazarf/fsanchezq — the job's
-    accounting group was fsanchezq (paleogenomics), not amedina, even though it
-    wrote to /scratch/groups/amedina and reads /mnt/data/amedina. It worked, but
-    be aware the default SLURM account may not match the data group; may matter
-    for scratch quota. Check `sacctmgr show assoc user=$USER` if scratch fills.
+[slurm accounting] seff 276894 shows User/Group esalazarf/fsanchezq. This is
+    EXPECTED: the maintainer's primary group is fsanchezq (paleogenomics); he is
+    a guest in amedina (the lab this pipeline is being built for — Lupus cohort).
+    Guest access is enough to read /mnt/data/amedina and write
+    /scratch/groups/amedina/esalazarf — jobs run fine. No --account override
+    needed. Only revisit (`sacctmgr show assoc user=$USER`) if amedina scratch
+    quota is exceeded. NB for other users: the pipeline should not assume the
+    user's primary group is the data group.
 
 [java] FENIX needs an explicit `module unload oracle-java` then
     `module load oracle-java/25.0.2` before `module load gatk` (see S03).
