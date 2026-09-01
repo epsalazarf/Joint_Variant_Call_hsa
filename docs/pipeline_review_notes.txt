@@ -177,9 +177,45 @@ choices made with the maintainer:
     * check_setup.sh flags the two known config problems automatically:
       bgzipped ref_gnm (GATK -R rejects it) and a missing .dict.
 
-  JAGUAR test recovery note: the cohort has a truncated GVCF
-  (EGAN00004696518, ~24 KB vs ~48 MB median, lands in wave 3). Expected: wave 3
-  fails, waves 1-2 (62 samples) survive. Fix = re-run Step 03a for that sample,
-  then re-run wave 3 as `update`.
+  JAGUAR test note (updated after the first FENIX run, 2026-08-31):
+  EGAN00004696518 (~24 KB vs ~48 MB median, wave 3) is NOT transfer-truncated —
+  it is a VALID bgzip that is simply near-empty (BGZF EOF marker present).
+  So there are two distinct bad-GVCF cases, now both handled:
+    * BGZF-truncated (no EOF marker) -> S04 warns "TRUNCATED", GenomicsDBImport
+      then fails "Premature end of file"; GENDBI_STRICT_GVCF=true aborts first.
+      All-or-nothing: none of that wave imports.
+    * valid but tiny (size << cohort median) -> S04 + check_setup warn
+      "unusually small"; S04 IMPORTS it anyway (near-empty sample in the DB).
+      Verify the sample's coverage before Step 05; if bad, re-run 03a and
+      re-import with action=update (GenomicsDB keeps the newer copy).
+  First run jobs: 276894 (w1) / 276895 (w2) / 276896 (w3), chained afterok.
+
+
+-------------------------------------------------------------------------------
+ 5. FUTURE TASKS
+-------------------------------------------------------------------------------
+
+[TASK: pipeline-wide pre-flight checker]  (requested by maintainer 2026-08-31)
+    The test/jaguar_chr22/check_setup.sh pattern proved very useful for the S04
+    JAGUAR run — a fast, read-only PASS/WARN/FAIL sweep that catches environment
+    and input problems before a job is ever submitted. Generalize it into a
+    reusable pipeline-wide setup checker that other lab users can run.
+
+    Scope / ideas:
+      * one entry point, e.g. bin/supp/check_env.sh [step] [inputs...], that
+        checks whatever the requested step needs and skips the rest.
+      * shared library of check helpers (module load + tool version, config
+        parse, reference .fa/.fai/.dict, bgzip/BGZF-EOF integrity, tiny-file
+        outliers, index presence, scratch writable, disk space, SLURM sanity).
+        Factor the helpers out of check_setup.sh so S04's checker and the
+        pipeline-wide one share code.
+      * per-step input contracts (01 FASTQ pairs, 02 sort.bam, 03 bqsr.bam,
+        04 chrom_gvcf dirs + sample map, 05 gendb workspaces, 06 VQSR
+        resource bundle — the last is also the S06 config gap in section 1).
+      * keep it read-only and side-effect free; exit non-zero on any FAIL;
+        keep the [PASS]/[WARN]/[FAIL] + summary format users liked.
+      * wire it into PIPELINE.single_sample.sh / run_pipeline.sh as a
+        preflight gate (opt-out flag), and document a standalone
+        "run this before you start" invocation in INSTRUCTIONS.md.
 
 ===============================================================================

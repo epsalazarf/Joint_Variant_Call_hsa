@@ -16,16 +16,21 @@ this is the experiment, not a real requirement). Big `--mem` is head-room only.
 
 ### Known bad sample (left in on purpose)
 
-`EGAN00004696518` (wave 3) is **24 KB** vs a ~48 MB median — a truncated GVCF.
-It is left in the map to confirm Step 04 flags it. Expected behaviour:
+`EGAN00004696518` (wave 3) is **24 KB** vs a ~48 MB median. From the first
+FENIX run it is a **valid bgzip that is simply near-empty** (the BGZF EOF
+marker is present — `check_setup.sh` reported no truncation), not a
+transfer-truncated file. Two failure modes, handled differently:
 
-- `make_wave_maps.sh` and `check_setup.sh` print a `TINY` / `no BGZF EOF marker` warning.
-- Step 04 prints `[!] WARNING: ... likely TRUNCATED` and then GenomicsDBImport
-  fails with `Premature end of file`, naming the file. Wave 3 exits non-zero.
-- **Waves 1–2 (62 samples) stay intact** — the failed update only touches the
-  scratch copy of the workspace.
-- Recovery: re-run Step 03a for that sample, then re-run wave 3 as `update`
-  (or set `GENDBI_STRICT_GVCF=true` to abort wave 3 before calling GATK).
+| Case | Detected by | Step 04 behaviour |
+|------|-------------|-------------------|
+| valid but tiny (this sample) | size vs median | `[!] WARNING: ... unusually small`; **imports anyway** — near-empty sample in the DB |
+| BGZF-truncated (no EOF marker) | `gvcf_looks_truncated` | `[!] WARNING: ... TRUNCATED`; GenomicsDBImport then fails `Premature end of file`; `GENDBI_STRICT_GVCF=true` aborts first |
+
+So wave 3 will most likely **succeed** and `EGAN00004696518` lands in the DB as
+a near-empty sample. Check its chr22 coverage / call count before Step 05; if
+it is genuinely bad, re-run Step 03a for it and re-import with `action=update`
+(GenomicsDB keeps the newer copy). The finisher lists it under
+"Unusually small (but valid) GVCF(s) imported".
 
 ## Files
 
@@ -70,10 +75,15 @@ Output workspace: `test/jaguar_chr22/out/genomicsdb/chr22/` (consumed later by S
 
 ## What success looks like
 
-- Waves 1 and 2 finish `[$] ... completed successfully!`, workspace sample count
-  grows 31 → 62.
-- Wave 3 fails on `EGAN00004696518` (expected); the other 30 wave-3 samples are
-  **not** imported (GenomicsDBImport is all-or-nothing per run). After fixing the
-  bad GVCF, re-running wave 3 imports all 31 and the DB reaches 93.
+- All three waves finish `[$] ... completed successfully!`; workspace sample
+  count grows 31 → 62 → 93.
+- Wave 3 logs `[!] WARNING: 'EGAN00004696518' GVCF unusually small` and imports
+  it anyway. Verify that sample's chr22 content afterward:
+  `bcftools view -H gendb://... -s EGAN00004696518 | head` (via Step 05, or
+  `gatk SelectVariants`).
 - `run_jaguar_waves.sh report` shows `Elapsed` / `TotalCPU` / `MaxRSS` per wave —
   compare wave 2 vs wave 3 to judge whether the extra CPUs/RAM helped.
+
+First run: jobs 276894 / 276895 / 276896 submitted 2026-08-31, chained on
+`afterok`. `check_setup.sh` passed all checks on FENIX (gatk 4.6.2.0,
+oracle-java 25, `/scratch/groups/amedina` on BeeGFS).

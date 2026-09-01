@@ -109,18 +109,37 @@ shopt -u nullglob
 if (( ${#maps[@]} == 0 )); then
   F "no wave maps in $MAPS_DIR — run make_wave_maps.sh first"
 else
+  # pre-pass: median GVCF size across all waves, for the "unusually small" flag
+  szfile="$(mktemp)"
+  for m in "${maps[@]}"; do
+    while IFS=$'\t' read -r label dir _ || [[ -n "${label:-}" ]]; do
+      [[ -z "${label// }" || "$label" == \#* ]] && continue
+      g="$dir/$label.raw_vars.$CHROM.g.vcf.gz"
+      [[ -f "$g" ]] && { stat -c%s "$g" 2>/dev/null || stat -f%z "$g"; } >> "$szfile"
+    done < "$m"
+  done
+  MEDIAN=$(sort -n "$szfile" | awk '{v[NR]=$1} END{if(NR)print (NR%2)?v[(NR+1)/2]:int((v[NR/2]+v[NR/2+1])/2); else print 0}')
+  SMALL_CUTOFF=$(( MEDIAN / 2 ))
+  rm -f "$szfile"
+  echo "  (median GVCF ${MEDIAN} b; flagging < ${SMALL_CUTOFF} b as unusually small)"
+
   seen_all=" "
   for m in "${maps[@]}"; do
     n=$(grep -cvE '^[[:space:]]*(#|$)' "$m")
     echo "  --- $(basename "$m")  ($n samples) ---"
-    dupes=0 miss=0 noidx=0 trunc=0 badsm=0
+    dupes=0 miss=0 noidx=0 trunc=0 badsm=0 small=0
     while IFS=$'\t' read -r label dir _ || [[ -n "${label:-}" ]]; do
       [[ -z "${label// }" || "$label" == \#* ]] && continue
       g="$dir/$label.raw_vars.$CHROM.g.vcf.gz"
       if [[ ! -f "$g" ]]; then F "  $label: GVCF not found ($g)"; ((miss++)); continue; fi
+      sz=$(stat -c%s "$g" 2>/dev/null || stat -f%z "$g")
       [[ -s "$g.tbi" || -s "$g.csi" ]] || { W "  $label: no .tbi/.csi index"; ((noidx++)); }
       tailhex=$(tail -c 28 "$g" 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
-      [[ "$tailhex" == "$BGZF_EOF" ]] || { W "  $label: no BGZF EOF marker — TRUNCATED ($(stat -c%s "$g" 2>/dev/null || stat -f%z "$g") b)"; ((trunc++)); }
+      if [[ "$tailhex" != "$BGZF_EOF" ]]; then
+        W "  $label: no BGZF EOF marker — TRUNCATED ($sz b)"; ((trunc++))
+      elif (( MEDIAN > 0 && sz < SMALL_CUTOFF )); then
+        W "  $label: valid bgzip but UNUSUALLY SMALL ($sz b vs ${MEDIAN} b median) — near-empty GVCF? check the sample's chr22 coverage"; ((small++))
+      fi
       sm=$(bcftools query -l "$g" 2>/dev/null)
       if [[ $(printf '%s\n' "$sm" | grep -c .) -ne 1 ]]; then W "  $label: GVCF header does not have exactly one sample"; ((badsm++)); fi
       [[ "$sm" != "$label" && -n "$sm" ]] && echo "        note: header sample '$sm' != map label '$label' (Step 04 uses the header name)"
@@ -129,7 +148,8 @@ else
     done < "$m"
     (( miss+dupes == 0 )) && P "  $(basename "$m"): all GVCFs present, no cross-wave dupes"
     (( noidx == 0 ))      || echo "        ($noidx missing index)"
-    (( trunc == 0 ))      && P "  $(basename "$m"): no truncated GVCFs" || echo "        ($trunc truncated — Step 04 warns; set GENDBI_STRICT_GVCF=true to hard-fail)"
+    (( trunc+small == 0 )) && P "  $(basename "$m"): no truncated or unusually-small GVCFs" \
+                           || echo "        ($trunc truncated, $small unusually small — Step 04 warns; GENDBI_STRICT_GVCF=true hard-fails on truncation)"
   done
 fi
 

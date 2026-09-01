@@ -124,6 +124,7 @@ njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-4}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"
 TRUNCATED_SEEN=""   # labels of samples whose GVCF looked truncated (warn mode)
+SMALL_SEEN=""       # labels of samples whose GVCF is a valid but tiny outlier
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -290,6 +291,26 @@ build_chrom_sample_map() {
   done < "$SAMPLE_MAP"
 
   (( count >= 1 )) || { echo "[X]  Empty sample map generated for $chr"; exit 1; }
+
+  # Size-outlier check: a valid-but-tiny GVCF (passes the BGZF EOF test) still
+  # points at a near-empty sample — usually a bad BAM upstream. Warn, don't block.
+  local sizes=() gv gs med cutoff
+  while IFS=$'\t' read -r _ gv; do
+    gs=$(stat -c%s "$gv" 2>/dev/null || stat -f%z "$gv" 2>/dev/null || echo 0)
+    sizes+=("$gs")
+  done < "$dest"
+  med=$(printf '%s\n' "${sizes[@]}" | sort -n | awk '{v[NR]=$1} END{ if(NR) print (NR%2)? v[(NR+1)/2] : int((v[NR/2]+v[NR/2+1])/2) }')
+  if [[ -n "${med:-}" ]] && (( med > 0 )); then
+    cutoff=$(( med / 2 ))
+    while IFS=$'\t' read -r sm gv; do
+      gs=$(stat -c%s "$gv" 2>/dev/null || stat -f%z "$gv" 2>/dev/null || echo 0)
+      if (( gs < cutoff )); then
+        echo "[!]  WARNING: '$sm' GVCF unusually small ($gs b vs ${med} b median) — near-empty sample? check its ${chr} coverage."
+        SMALL_SEEN="${SMALL_SEEN}${sm} "
+      fi
+    done < "$dest"
+  fi
+
   echo "[i]    $chr: $count samples -> $dest"
 }
 
@@ -398,6 +419,11 @@ finisher() {
     echo "[!]  Truncated-looking GVCF(s) were kept in the cohort: ${TRUNCATED_SEEN}"
     echo "[!]  Re-run Step 03a for those samples and re-import with action=update,"
     echo "[!]  or rebuild the workspace without them."
+  fi
+  if [[ -n "$SMALL_SEEN" ]]; then
+    echo
+    echo "[!]  Unusually small (but valid) GVCF(s) imported: ${SMALL_SEEN}"
+    echo "[!]  Likely near-empty samples — verify their coverage before Step 05."
   fi
 
   echo
