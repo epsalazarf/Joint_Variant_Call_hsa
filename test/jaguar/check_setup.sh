@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Title : JAGUAR chr22 — pre-flight check for Step 04 (GenomicsDBImport)
+# Title : JAGUAR — pre-flight check for Step 04 (GenomicsDBImport)
 # About : Fast read-only sanity sweep to run on FENIX BEFORE launching the
 #         wave jobs. Prints PASS / WARN / FAIL lines; exits non-zero if any FAIL.
 #         Nothing here writes data or submits jobs.
-# Usage : bash check_setup.sh [maps_dir] [output_dir]
-#           maps_dir   — where jaguar_chr22_wave*.sample_map.tsv live
+# Usage : bash check_setup.sh [options]
+#   -c, --chrom  CHR     chromosome (default: chr22)
+#       --maps-dir DIR   where jaguar_<chrom>_wave*.sample_map.tsv live
 #                        (default: next to this script)
-#           output_dir — where Step 04 will create genomicsdb/<CHR>
-#                        (default: <repo>/test/jaguar_chr22/out)
+#       --output DIR     where Step 04 will create genomicsdb/<CHR>
+#                        (default: /mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22)
+#   -h, --help
 # =============================================================================
 
 set -uo pipefail   # NOT -e: we want to run every check and tally at the end
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-MAPS_DIR="${1:-$HERE}"
-OUTPUT_DIR="${2:-/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag22}"
+
+CHROM="chr22"
+MAPS_DIR="$HERE"
+OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag22"
+
+while (( $# )); do
+  case "$1" in
+    -c|--chrom)   CHROM="${2:?}"; shift 2 ;;
+    --maps-dir)   MAPS_DIR="${2:?}"; shift 2 ;;
+    --output)     OUTPUT_DIR="${2:?}"; shift 2 ;;
+    -h|--help)    sed -n '3,15p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
+    # legacy positional form: check_setup.sh [maps_dir] [output_dir]
+    /*|./*)       MAPS_DIR="$1"; shift; [[ "${1:-}" ]] && { OUTPUT_DIR="$1"; shift; } ;;
+    *)            echo "unknown argument: $1  (--help)" >&2; exit 2 ;;
+  esac
+done
 
 S04="$REPO/bin/04_gatk_GenomicsDB_import.sh"
 CONFIG="$REPO/config/config.yaml"
-CHROM="chr22"
 BGZF_EOF="1f8b08040000000000ff0600424302001b0003000000000000000000"
 
 pass=0 warn=0 fail=0
@@ -28,6 +43,8 @@ P(){ echo "  [PASS] $*"; ((pass++)); }
 W(){ echo "  [WARN] $*"; ((warn++)); }
 F(){ echo "  [FAIL] $*"; ((fail++)); }
 hd(){ echo; echo "== $* =="; }
+
+echo "JAGUAR Step-04 pre-flight — chrom=$CHROM  maps=$MAPS_DIR  output=$OUTPUT_DIR"
 
 # --- environment ----------------------------------------------------------------
 hd "Environment"
@@ -138,7 +155,7 @@ else
       if [[ "$tailhex" != "$BGZF_EOF" ]]; then
         W "  $label: no BGZF EOF marker — TRUNCATED ($sz b)"; ((trunc++))
       elif (( MEDIAN > 0 && sz < SMALL_CUTOFF )); then
-        W "  $label: valid bgzip but UNUSUALLY SMALL ($sz b vs ${MEDIAN} b median) — near-empty GVCF? check the sample's chr22 coverage"; ((small++))
+        W "  $label: valid bgzip but UNUSUALLY SMALL ($sz b vs ${MEDIAN} b median) — near-empty GVCF? check the sample's ${CHROM} coverage"; ((small++))
       fi
       sm=$(bcftools query -l "$g" 2>/dev/null)
       if [[ $(printf '%s\n' "$sm" | grep -c .) -ne 1 ]]; then W "  $label: GVCF header does not have exactly one sample"; ((badsm++)); fi
@@ -190,7 +207,7 @@ if (( fail > 0 )); then
   echo "  -> resolve FAILs before launching."
   exit 1
 elif (( warn > 0 )); then
-  echo "  -> OK to launch; review WARNs (truncated GVCF is expected for this test)."
+  echo "  -> OK to launch; review the WARNs first (a known tiny/truncated GVCF is fine)."
   exit 0
 else
   echo "  -> all clear."

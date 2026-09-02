@@ -1,7 +1,7 @@
 # Step 04 — GenomicsDBImport: design notes
 
 **Script:** `bin/04_gatk_GenomicsDB_import.sh`
-**Status:** implemented 2026-08-31, validated locally on synthetic data, **pending FENIX validation**
+**Status:** **validated on FENIX** — JAGUAR chr22, 93 samples, 3-wave incremental (test01, 2026-09-01). Harness: `test/jaguar/` (any chromosome). Whole-genome scatter + shared-perms setup still to do.
 **Source:** [GATK4 Best Practices](https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-) · [GenomicsDBImport tool doc](https://gatk.broadinstitute.org/hc/en-us/articles/360057439331-GenomicsDBImport)
 
 ---
@@ -185,7 +185,7 @@ warns when the output dir is not setgid.
 
 ## First FENIX test (pending): JAGUAR cohort, chr22
 
-See `test/jaguar_chr22/`. 93 samples, 3 waves of 31 (create + update + update),
+See `test/jaguar/`. 93 samples, 3 waves of 31 (create + update + update),
 escalating resources per wave. Includes one deliberately-truncated GVCF
 (`EGAN00004696518`) to confirm the truncation flag. Helpers:
 `make_wave_maps.sh`, `check_setup.sh` (pre-flight), `run_jaguar_waves.sh`

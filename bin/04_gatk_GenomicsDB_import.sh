@@ -148,7 +148,7 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 #   GENDBI_CONSOLIDATE     — pass --consolidate (rewrites the whole array into one
 #                            fragment). Default: true for `create`, FALSE for
 #                            `update`. Consolidation cost scales with TOTAL db
-#                            size, not the wave — on the JAGUAR chr22 test it
+#                            size, not the wave — on the JAGUAR test it
 #                            added ~1.5-2.3 h per update wave. For many small
 #                            update waves, leave it off and run ONE consolidating
 #                            pass (GENDBI_CONSOLIDATE=true on the last wave)

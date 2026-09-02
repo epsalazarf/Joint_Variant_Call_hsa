@@ -265,7 +265,7 @@ choices made with the maintainer:
 -------------------------------------------------------------------------------
 
 [TASK: pipeline-wide pre-flight checker]  (requested by maintainer 2026-08-31)
-    The test/jaguar_chr22/check_setup.sh pattern proved very useful for the S04
+    The test/jaguar/check_setup.sh pattern proved very useful for the S04
     JAGUAR run — a fast, read-only PASS/WARN/FAIL sweep that catches environment
     and input problems before a job is ever submitted. Generalize it into a
     reusable pipeline-wide setup checker that other lab users can run.

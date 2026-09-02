@@ -74,7 +74,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 
 | Blocker | Affects | Owner action |
 |---------|---------|--------------|
-| S04 not yet run on FENIX with real GVCFs | S04 → prod | **run `test/jaguar_chr22/`** — 93 samples, 3 waves (create+update+update), chr22; confirm scratch copy-back + module load + truncation flag |
+| S04 not yet run on FENIX with real GVCFs | S04 → prod | **run `test/jaguar/`** — 93 samples, 3 waves (create+update+update), chr22; confirm scratch copy-back + module load + truncation flag |
 | No per-chromosome SLURM launcher for S04 | S04 batch use | build `GENDBI.seq_batch-slurmer.sh` after S04 validated (S04 can loop chroms serially meanwhile) |
 | VQSR resource files absent from `config/config.yaml` | S05→S06 | add `ref_hapmap` / `ref_omni` / `ref_1kg_snp` / `ref_mills`; stage files on FENIX |
 | Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; small early cohorts need hard-filtering path |
@@ -115,7 +115,7 @@ Ran against synthetic 3-sample data (chr22 + chrM, tiny reference), GATK 4.6.2.0
 | missing / empty sample map | ✅ error, exit 1 |
 | truncated GVCF (no BGZF EOF marker) | ✅ `[!] WARNING` then GATK fails "Premature end of file"; prior waves' workspace intact |
 | `GENDBI_STRICT_GVCF=true` on truncated GVCF | ✅ aborts before calling GATK, exit 1 |
-| 3-wave create→update→update via `test/jaguar_chr22/` helpers (synthetic) | ✅ DB grows 2→4; wave 3 fails only on the bad sample |
+| 3-wave create→update→update via `test/jaguar/` helpers (synthetic) | ✅ DB grows 2→4; wave 3 fails only on the bad sample |
 | `run_jaguar_waves.sh --dry-run` | ✅ correct chained sbatch cmds + manifest |
 
 Not yet exercised: real FENIX module load, `/scratch` path, the real 93-sample
