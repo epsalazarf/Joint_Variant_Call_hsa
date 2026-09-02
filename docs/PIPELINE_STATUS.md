@@ -15,7 +15,7 @@
 | 02a | `bin/supp/02a_bqsr_evaluate.sh` | ✅ Functional | per sample | retroactive BQSR covariate plots |
 | 03a | `bin/03_gatk_haplotype_caller.sh` | ✅ Functional | per sample | GVCF mode → canon-chr GVCF → `chrom_gvcf/*.raw_vars.<CHR>.g.vcf.gz` |
 | 03b | `bin/03_glimpse2_imputation.sh` | ⏸ Paused | per sample | low-coverage imputation; ref chunks not generated; **not** a GVCF producer |
-| **04** | **`bin/04_gatk_GenomicsDB_import.sh`** | 🟡 **Implemented — needs FENIX validation** | **per cohort, per chromosome** | **new (2026-08-31); tested locally on synthetic data** |
+| **04** | **`bin/04_gatk_GenomicsDB_import.sh`** | ✅ **Validated on FENIX** | **per cohort, per chromosome** | **JAGUAR chr22, 93 samples, 3-wave incremental (test01, 2026-09-01); whole-genome scatter + shared-perms setup still to do** |
 | 05 | `bin/05_gatk_GenotypeGVCFs.sh` | ⛔ Stub (empty) | per cohort, per chromosome | on hold until S04 proven |
 | 06 | `bin/06_gatk_vqsr.sh` | ⛔ Stub (empty) | per cohort | on hold; **config gap — VQSR resources missing** |
 | — | `bin/supp/run_pipeline.sh` | ⛔ Stub (2 lines) | — | end-to-end wrapper |

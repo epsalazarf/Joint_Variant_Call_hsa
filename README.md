@@ -65,7 +65,7 @@ FASTQ reads
 | 02a | `02a_bqsr_evaluate.sh` | Functional |
 | 03a | `03_gatk_haplotype_caller.sh` | Functional |
 | 03b | `03_glimpse2_imputation.sh` | **Paused** — reference chunks not yet generated |
-| 04 | `04_gatk_GenomicsDB_import.sh` | **Beta** — implemented, local tests pass, FENIX validation pending |
+| 04 | `04_gatk_GenomicsDB_import.sh` | **Functional** — validated on FENIX (JAGUAR chr22, 93 samples, 3-wave incremental); whole-genome scatter pending |
 | 05 | `05_gatk_GenotypeGVCFs.sh` | Stub |
 | 06 | `06_gatk_vqsr.sh` | Stub |
 
