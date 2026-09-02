@@ -205,6 +205,36 @@ choices made with the maintainer:
       re-import with action=update (GenomicsDB keeps the newer copy).
   First run jobs: 276894 (w1) / 276895 (w2) / 276896 (w3), chained afterok.
 
+  TEST01 COMPLETED 2026-09-01 (jobs 278359-61, 2-4 CPU / 16 G, output to
+  /mnt/data/amedina/esalazarf/JVCdev/test_gendbi_jag22). All 3 waves succeeded;
+  chr22 GenomicsDB holds 93 samples, ~5.3 GB. Key findings:
+
+  * `--consolidate` is the dominant cost and it scales with TOTAL db size, not
+    the wave size (it rewrites the whole array into one fragment):
+        wave 1  create  +31 ( 31 total)   54 min   consolidate ~ 3 min
+        wave 2  update  +31 ( 62 total)  147 min   consolidate ~96 min
+        wave 3  update  +31 ( 93 total)  190 min   consolidate ~140 min
+    -> S04 now defaults --consolidate ON for `create`, OFF for `update`
+    (GENDBI_CONSOLIDATE overrides). Strategy for wave imports: append fragments
+    on intermediate waves, run ONE consolidating pass (GENDBI_CONSOLIDATE=true)
+    on the last wave before Step 05. GenomicsDB reads work fine un-consolidated,
+    just a bit slower.
+  * More cores/RAM confirmed useless: wave 3 had 4 CPU vs wave 2's 2 CPU and was
+    slower (bigger db). RAM peaked ~6.4 GB (Xmx6G). 2 CPU / 16 G is the setting.
+  * `update` copies the whole workspace to scratch and back — cost grows with db
+    size (wave 3 staged 3.6 GB in, 5.4 GB out). Acceptable on BeeGFS for now.
+  * The tiny sample EGAN00004696518 (24 KB) was flagged by both the pre-build
+    warning and the finisher, and imported fine (near-empty). Confirm its
+    content before trusting it in Step 05.
+  * Workspace files are mode 0700, group fsanchezq (esalazarf's primary group).
+    OTHER amedina users cannot read the DB. For the shared pipeline: make the
+    output dir setgid amedina (chmod g+s) and/or set `umask 0027`, or S05 will
+    fail for a lupus analyst who is not esalazarf. TODO: consider a
+    GENDBI_SHARE toggle that chmod's the workspace g+rX after copy-back.
+  * The `.__consolidation_lock` (0 bytes) left in the array dir is a benign
+    TileDB leftover with --genomicsdb-shared-posixfs-optimizations; does not
+    block reads.
+
   FIRST RUN FAILED (quota) — fixed 2026-09-01:
   * Root cause: run_jaguar_waves.sh defaulted OUTPUT_DIR to <repo>/test/jaguar_chr22/out,
     and the repo lives in $HOME on FENIX (hard ~5 GB quota). GenomicsDBImport

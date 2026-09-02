@@ -169,6 +169,15 @@ fi
 if [[ -e "$OUTPUT_DIR/genomicsdb/$CHROM/callset.json" ]]; then
   W "genomicsdb/$CHROM already exists — wave 1 (create) will SKIP it; delete it for a clean first run"
 fi
+# shared-readability: GenomicsDB writes mode 0700. If other lab members will run
+# Step 05, the output dir should be setgid to the data group so files inherit it.
+odmode=$(stat -c '%A' "$OUTPUT_DIR" 2>/dev/null || echo '?')
+odgrp=$(stat -c '%G' "$OUTPUT_DIR" 2>/dev/null || echo '?')
+if [[ "$odmode" == *[sS]* ]]; then
+  P "output dir is setgid ($odmode, group $odgrp) — new files inherit the group"
+else
+  W "output dir not setgid ($odmode, group $odgrp) — GenomicsDB files will be 0700 / your primary group; other lab members can't run Step 05 on this DB. Fix once: chgrp -R <data-group> '$OUTPUT_DIR' && chmod g+rwsX '$OUTPUT_DIR', or set 'umask 0027' before the run."
+fi
 avail_g=$(df -Pk "$OUTPUT_DIR" 2>/dev/null | awk 'NR==2{print int($4/1048576)}')
 [[ -n "${avail_g:-}" ]] && { (( avail_g >= 5 )) && P "output fs has ~${avail_g} G free" || W "output fs only ~${avail_g} G free — a full-cohort per-chrom workspace can be several GB"; }
 df -h "$OUTPUT_DIR" 2>/dev/null | awk 'NR==1||NR==2{print "        "$0}'

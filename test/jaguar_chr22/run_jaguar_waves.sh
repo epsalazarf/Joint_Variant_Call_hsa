@@ -39,19 +39,20 @@ DEFAULT_OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag2
 # --- per-wave resource envelope (edit here) --------------------------------------
 #            wave:      1        2         3
 WAVE_ACTION=( -    create   update    update  )
-WAVE_CPUS=(   -    2        2         4       )   # --cpus-per-task
+WAVE_CPUS=(   -    2        2         2       )   # --cpus-per-task
 WAVE_MEM=(    -    16G      16G       16G     )   # --mem
-WAVE_TIME=(   -    6:00:00  6:00:00   8:00:00 )   # --time
-WAVE_RTHREADS=(-   2        2         4       )   # GENDBI_READER_THREADS
-WAVE_BATCH=(  -    50       50        100     )   # GENDBI_BATCH_SIZE
+WAVE_TIME=(   -    3:00:00  3:00:00   6:00:00 )   # --time
+WAVE_RTHREADS=(-   2        2         2       )   # GENDBI_READER_THREADS
+WAVE_BATCH=(  -    50       50        50      )   # GENDBI_BATCH_SIZE
+WAVE_CONSOL=( -    true     false     true    )   # GENDBI_CONSOLIDATE
 N_WAVES=3
-# Sizing from `seff 276894` (wave-1 first attempt, 31 samples / chr22):
-#   8 cores -> CPU efficiency 9.53% (~0.76 core busy over 72 min wall);
-#   6.68 GB RAM used of 32 GB. GenomicsDBImport for one interval is effectively
-#   serial (the tail `Consolidating` step especially) + I/O-bound, so extra
-#   cores/RAM do not shorten it. Waves are now small; wave 3 keeps 4 cores only
-#   as a last confirmation that more does not help. Adjust `--time` up for
-#   larger chromosomes (chr22 is the smallest autosome).
+# Sizing — from test01 (seff 276894 + the 3-wave run 278359-61):
+#   * GenomicsDBImport for one interval is serial + I/O-bound; CPU eff was 9.53%
+#     at 8 cores and RAM peaked at 6.68 GB. 2 cores / 16 G is plenty.
+#   * --consolidate rewrites the WHOLE array and its cost scales with total DB
+#     size: create 54 min -> update+31 147 min -> update+31 190 min. So we only
+#     consolidate on wave 1 (create) and the LAST wave; middle waves just append
+#     a fragment (fast). --time on the last wave is bigger for the consolidate.
 
 # =============================================================================
 
@@ -133,7 +134,7 @@ for (( w=1; w<=N_WAVES; w++ )); do
   jobname="JVC-GDBI-w${w}"
   logfile="$LOG_DIR/jaguar-w${w}-%j.out"
 
-  wrap="env GENDBI_READER_THREADS=${WAVE_RTHREADS[$w]} GENDBI_BATCH_SIZE=${WAVE_BATCH[$w]} \
+  wrap="env GENDBI_READER_THREADS=${WAVE_RTHREADS[$w]} GENDBI_BATCH_SIZE=${WAVE_BATCH[$w]} GENDBI_CONSOLIDATE=${WAVE_CONSOL[$w]} \
 bash '$S04' '$map' '$OUTPUT_DIR' '$CHROM' '$action'"
 
   set -- --parsable --job-name="$jobname" \
@@ -142,7 +143,7 @@ bash '$S04' '$map' '$OUTPUT_DIR' '$CHROM' '$action'"
          --output="$logfile"
   [[ -n "$dep" ]] && set -- "$@" --dependency="afterok:$dep"
 
-  echo "[*]  wave $w: $action   ($nsamp samples)   ${WAVE_CPUS[$w]} CPU / ${WAVE_MEM[$w]} / ${WAVE_TIME[$w]}   rthreads=${WAVE_RTHREADS[$w]} batch=${WAVE_BATCH[$w]}${dep:+   [afterok:$dep]}"
+  echo "[*]  wave $w: $action   ($nsamp samples)   ${WAVE_CPUS[$w]} CPU / ${WAVE_MEM[$w]} / ${WAVE_TIME[$w]}   rthreads=${WAVE_RTHREADS[$w]} batch=${WAVE_BATCH[$w]} consolidate=${WAVE_CONSOL[$w]}${dep:+   [afterok:$dep]}"
 
   if $DRY; then
     echo "       sbatch $* --wrap \"$wrap\""

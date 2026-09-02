@@ -138,7 +138,30 @@ and RAM do not shorten it.** Suggested per-chromosome job:
 
 Java `-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`, `--batch-size 50`
 (imports all samples at once below 50; caps open file handles / memory above
-that), `--consolidate`, `--genomicsdb-shared-posixfs-optimizations true`.
+that), `--genomicsdb-shared-posixfs-optimizations true`.
+
+### `--consolidate` — the dominant cost (test01, jobs 278359-61)
+
+| wave | action | samples added | db total | wall | consolidate portion |
+|------|--------|---------------|----------|------|---------------------|
+| 1 | create | 31 | 31 | 54 min | ~3 min |
+| 2 | update | 31 | 62 | 147 min | ~96 min |
+| 3 | update | 31 | 93 | 190 min | ~140 min |
+
+`--consolidate` rewrites the **entire array** into one fragment, so its cost
+scales with **total DB size**, not the wave. S04 now defaults it **on for
+`create`, off for `update`** (`GENDBI_CONSOLIDATE` overrides). For wave imports:
+append fragments on the intermediate waves and run **one** consolidating pass
+(`GENDBI_CONSOLIDATE=true`) on the last wave before Step 05. Un-consolidated
+GenomicsDB reads work — just slightly slower.
+
+### Shared readability
+
+GenomicsDB writes workspace files mode `0700`, owned by your primary group
+(`fsanchezq` for the maintainer). For other amedina members to run Step 05 on
+the DB, the **output directory must be setgid** to the data group
+(`chmod g+s`, `chgrp`) or the job must run with `umask 0027`. `check_setup.sh`
+warns when the output dir is not setgid.
 
 ---
 

@@ -145,9 +145,19 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 #   GENDBI_JAVA_MEM        — Java -Xms/-Xmx                (default 6G remote / 4G local)
 #   GENDBI_STRICT_GVCF     — true: abort on a GVCF that looks truncated;
 #                            false (default): warn and keep it in the cohort
+#   GENDBI_CONSOLIDATE     — pass --consolidate (rewrites the whole array into one
+#                            fragment). Default: true for `create`, FALSE for
+#                            `update`. Consolidation cost scales with TOTAL db
+#                            size, not the wave — on the JAGUAR chr22 test it
+#                            added ~1.5-2.3 h per update wave. For many small
+#                            update waves, leave it off and run ONE consolidating
+#                            pass (GENDBI_CONSOLIDATE=true on the last wave)
+#                            before Step 05.
 njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"
+if [[ "$ACTION" == "create" ]]; then CONSOLIDATE="${GENDBI_CONSOLIDATE:-true}"
+else                                 CONSOLIDATE="${GENDBI_CONSOLIDATE:-false}"; fi
 TRUNCATED_SEEN=""   # labels of samples whose GVCF looked truncated (warn mode)
 SMALL_SEEN=""       # labels of samples whose GVCF is a valid but tiny outlier
 
@@ -163,7 +173,7 @@ else
   MEM="${GENDBI_JAVA_MEM:-4G}"
 fi
 echo "[i]  Environment: $env_type"
-echo "[i]  Knobs      : reader-threads=${njobs}  batch-size=${BATCH_SIZE}  java-mem=${MEM}  strict-gvcf=${STRICT_GVCF}"
+echo "[i]  Knobs      : reader-threads=${njobs}  batch-size=${BATCH_SIZE}  java-mem=${MEM}  consolidate=${CONSOLIDATE}  strict-gvcf=${STRICT_GVCF}"
 
 # Parse YAML config into Bash variables (embedded parser — no external tool)
 eval "$(
@@ -411,6 +421,8 @@ import_one_chrom() {
   # --- run GenomicsDBImport ---
   # (JDK-25 "restricted method" / sun.misc.Unsafe warnings from GATK 4.6's native
   #  libs are harmless — GATK 4.6 targets JDK 17. Not worth extra --java-options.)
+  [[ "$CONSOLIDATE" == "true" ]] && mode_opts+=(--consolidate)
+
   set -o xtrace
   gatk --java-options "-Xms${MEM} -Xmx${MEM}" GenomicsDBImport \
     --sample-name-map "$map" \
@@ -419,7 +431,6 @@ import_one_chrom() {
     --batch-size "$BATCH_SIZE" \
     --reader-threads "$njobs" \
     --genomicsdb-shared-posixfs-optimizations true \
-    --consolidate \
     --verbosity ERROR \
     "${mode_opts[@]}"
   set +o xtrace
@@ -492,6 +503,12 @@ finisher() {
   echo
   if (( missing == 0 )); then
     echo "[$] GATK GenomicsDBImport [FENIX] completed successfully!"
+    local _one; _one="${CHROMS[0]}"
+    [[ -d "${OUTPUT_PATH}/genomicsdb/${_one}" ]] || _one=chrMT
+    echo "[i]  Verify the DB reads before Step 05, e.g.:"
+    echo "[i]    gatk SelectVariants -R '${ref_gnm}' \\"
+    echo "[i]      -V 'gendb://${OUTPUT_PATH}/genomicsdb/${_one}' -L ${_one%%:*}:1-200000 -O /tmp/check.vcf.gz"
+    echo "[i]    bcftools query -l /tmp/check.vcf.gz | wc -l    # expected sample count"
     echo "[i]  Next: Step 05 (GenotypeGVCFs) reads  gendb://<workspace>  per chromosome."
     echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
     exit 0

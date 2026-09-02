@@ -4,19 +4,16 @@ First real-data validation of `bin/04_gatk_GenomicsDB_import.sh` on FENIX.
 **93 samples**, chr22 only, imported in **three waves of 31** to exercise the
 incremental (`update`) path twice.
 
-| Wave | Action | Samples | First … last | SLURM (CPU / mem / time) | reader-threads / batch |
-|------|--------|---------|--------------|--------------------------|------------------------|
-| 1 | `create` | 31 | EGAN00004552304 … EGAN00004552334 | 2 / 16G / 6h | 2 / 50 |
-| 2 | `update` | 31 | EGAN00004552335 … EGAN00004696501 | 2 / 16G / 6h | 2 / 50 |
-| 3 | `update` | 31 | EGAN00004696502 … EGAN00004710984 | 4 / 16G / 8h | 4 / 100 |
+| Wave | Action | Samples | First … last | SLURM (CPU / mem / time) | consolidate |
+|------|--------|---------|--------------|--------------------------|-------------|
+| 1 | `create` | 31 | EGAN00004552304 … EGAN00004552334 | 2 / 16G / 3h | yes |
+| 2 | `update` | 31 | EGAN00004552335 … EGAN00004696501 | 2 / 16G / 3h | **no** |
+| 3 | `update` | 31 | EGAN00004696502 … EGAN00004710984 | 2 / 16G / 6h | yes (final) |
 
-**Resource experiment — mostly already answered.** `seff 276894` (the first
-wave-1 attempt at 8 cores / 32 GB) reported **CPU efficiency 9.53%** and
-**6.68 GB** RAM used over 72 min. GenomicsDBImport for one interval is
-effectively serial (the tail `Consolidating` step) and I/O-bound, so more
-cores/RAM don't shorten it. Waves are now small; wave 3 keeps 4 cores purely as
-a final confirmation. `run_jaguar_waves.sh report` will show whether even that
-made a difference.
+Sizing settled by test01 (results below): GenomicsDBImport for one interval is
+serial + I/O-bound — 2 CPU / 16 G is plenty. The expensive variable is
+`--consolidate` (rewrites the whole array); only wave 1 and the final wave pay
+it now. All 2 reader-threads / batch 50.
 
 ### Known bad sample (left in on purpose)
 
@@ -79,16 +76,37 @@ Output workspace: `/mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22/genomicsdb/c
 (group storage — **never** the repo/`$HOME`; consumed later by Step 05).
 Wave maps + SLURM logs stay in `test/jaguar_chr22/` (tiny, git-ignored).
 
-## What success looks like
+## Test01 result (2026-09-01, jobs 278359-61) — PASS
 
-- All three waves finish `[$] ... completed successfully!`; workspace sample
-  count grows 31 → 62 → 93.
-- Wave 3 logs `[!] WARNING: 'EGAN00004696518' GVCF unusually small` and imports
-  it anyway. Verify that sample's chr22 content afterward:
-  `bcftools view -H gendb://... -s EGAN00004696518 | head` (via Step 05, or
-  `gatk SelectVariants`).
-- `run_jaguar_waves.sh report` shows `Elapsed` / `TotalCPU` / `MaxRSS` per wave —
-  compare wave 2 vs wave 3 to judge whether the extra CPUs/RAM helped.
+All three waves finished `[$] ... completed successfully!`. chr22 GenomicsDB at
+`/mnt/data/amedina/esalazarf/JVCdev/test_gendbi_jag22/genomicsdb/chr22` holds
+**93 samples**, ~5.3 GB.
+
+| wave | action | db total | wall | note |
+|------|--------|----------|------|------|
+| 1 | create | 31 | 54 min | consolidated |
+| 2 | update | 62 | 147 min | **consolidated the whole 62-sample array** |
+| 3 | update | 93 | 190 min | consolidate + the tiny sample warning |
+
+**Findings folded back into the code:**
+
+- `--consolidate` cost scales with *total* DB size, not the wave (it rewrites the
+  whole array). S04 now consolidates on `create` only; `run_jaguar_waves.sh`
+  sets `GENDBI_CONSOLIDATE` true / **false** / true across the three waves so
+  only wave 1 and the last wave pay it. Re-running test01 should drop wave 2 to
+  ~50 min.
+- More cores/RAM don't help (wave 3 had 4 CPU, still slower — bigger DB). Waves
+  are now all 2 CPU / 16 G.
+- `EGAN00004696518` (24 KB) was flagged by the pre-build warning *and* the
+  finisher, and imported as a near-empty sample. **Check its content before
+  Step 05:** `gatk SelectVariants -R <ref> -V gendb://.../genomicsdb/chr22 -sn EGAN00004696518 -L chr22 -O /tmp/x.vcf.gz` then look at the record count.
+- Workspace files are `0700` / group `fsanchezq` → other amedina users can't
+  read the DB. Make the output dir setgid the data group (or `umask 0027`)
+  before a shared run; `check_setup.sh` now warns about this.
+- `.__consolidation_lock` (0 B) left in the array dir is a benign TileDB
+  leftover — does not block reads.
+
+Verify the DB reads before Step 05 (S04's finisher prints the exact command).
 
 ### First run (2026-08-31) — failed on quota, fixed
 
