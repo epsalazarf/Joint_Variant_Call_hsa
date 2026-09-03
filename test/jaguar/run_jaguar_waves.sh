@@ -2,12 +2,12 @@
 # =============================================================================
 # Title : JAGUAR — sequential N-wave launcher for Step 04 (GenomicsDBImport)
 # About : Submits N chained SLURM jobs for one chromosome:
-#           wave 1        create  (fresh GenomicsDB)            + consolidate
-#           waves 2..N-1  update  (afterok previous)            no consolidate
-#           wave N        update  (afterok previous)            + consolidate
-#         Intermediate updates just append a fragment (fast); consolidation
-#         (rewrites the whole array — cost scales with total DB size) is paid
-#         only on wave 1 and the final wave. All logs -> LOG_DIR + a manifest.
+#           wave 1        create  (fresh GenomicsDB)   + consolidate (trivial)
+#           waves 2..N    update  (afterok previous)    append a fragment only
+#         Consolidation on `update` merges fragments and its cost scales with
+#         the whole DB (~13.5 h for 93 samples on chr1 — worse than a full
+#         rebuild), so updates never consolidate. GenotypeGVCFs reads
+#         multi-fragment DBs fine. All logs -> LOG_DIR + a manifest.
 #
 # Usage :
 #   bash run_jaguar_waves.sh [options] [cohort_root] [output_dir]      # submit
@@ -18,8 +18,7 @@
 #   -w, --waves N      number of waves (default: 3)
 #       --cpus  N      --cpus-per-task per wave (default: 2)
 #       --mem   SIZE   --mem per wave           (default: 16G)
-#       --hours H      --time base in hours     (default: 4); consolidating
-#                      waves (1 and N) get 2*H
+#       --hours H      --time in hours per wave (default: 4)
 #
 #   cohort_root  dir containing bam/<SAMPLE>/chrom_gvcf/...
 #                (default: /mnt/data/amedina/mramirezc/JAGUAR_JVC)
@@ -92,10 +91,15 @@ esac
 
 # ---------- wave plan ----------------------------------------------------
 #   action:      wave 1 = create, rest = update
-#   consolidate: wave 1 and wave N only
+#   consolidate: wave 1 ONLY. On `create` it is a ~4 s no-op (single fragment).
+#                On `update` it merges fragments and the cost scales with the
+#                whole DB — measured at ~13.5 h for 93 samples on chr1 (test02),
+#                which is worse than a full `create` rebuild. So updates just
+#                append a fragment; GenotypeGVCFs reads multi-fragment DBs fine.
+#                Force it on a wave with GENDBI_CONSOLIDATE=true if you must.
 wave_action()  { (( $1 == 1 )) && echo create || echo update; }
-wave_consol()  { { (( $1 == 1 )) || (( $1 == N_WAVES )); } && echo true || echo false; }
-wave_time()    { local h=$HOURS; [[ "$(wave_consol "$1")" == true ]] && h=$(( HOURS * 2 )); fmt_time "$h"; }
+wave_consol()  { (( $1 == 1 )) && echo true || echo false; }
+wave_time()    { fmt_time "$HOURS"; }
 
 # ---------- maps: build if absent --------------------------------------------
 need_maps=false
@@ -123,7 +127,7 @@ echo "[&]  JAGUAR ${CHROM} — Step 04 wave launcher   ($TS)"
 echo "[i]  chromosome  : $CHROM     waves: $N_WAVES"
 echo "[i]  cohort_root : $COHORT_ROOT"
 echo "[i]  output_dir  : $OUTPUT_DIR"
-echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h  (consolidating waves: $(( HOURS*2 ))h)"
+echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h"
 echo "[i]  logs        : $LOG_DIR"
 echo "[i]  manifest    : $MANIFEST"
 echo "[i]  dry-run     : $DRY"

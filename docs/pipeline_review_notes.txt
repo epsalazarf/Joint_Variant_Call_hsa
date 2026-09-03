@@ -214,15 +214,46 @@ choices made with the maintainer:
         wave 1  create  +31 ( 31 total)   54 min   consolidate ~ 3 min
         wave 2  update  +31 ( 62 total)  147 min   consolidate ~96 min
         wave 3  update  +31 ( 93 total)  190 min   consolidate ~140 min
-    -> S04 now defaults --consolidate ON for `create`, OFF for `update`
-    (GENDBI_CONSOLIDATE overrides). Strategy for wave imports: append fragments
-    on intermediate waves, run ONE consolidating pass (GENDBI_CONSOLIDATE=true)
-    on the last wave before Step 05. GenomicsDB reads work fine un-consolidated,
-    just a bit slower.
+    -> S04 defaults --consolidate ON for `create`, OFF for `update`
+    (GENDBI_CONSOLIDATE overrides). See TEST02 — updates now NEVER consolidate.
   * More cores/RAM confirmed useless: wave 3 had 4 CPU vs wave 2's 2 CPU and was
     slower (bigger db). RAM peaked ~6.4 GB (Xmx6G). 2 CPU / 16 G is the setting.
   * `update` copies the whole workspace to scratch and back — cost grows with db
     size (wave 3 staged 3.6 GB in, 5.4 GB out). Acceptable on BeeGFS for now.
+
+  TEST02 COMPLETED 2026-09-03 — chr1 (biggest chromosome), 2 waves, jobs
+  279778/279779, 4 CPU / 32 G, output to the same JVCdev workspace. Both
+  succeeded; chr1 GenomicsDB holds 93 samples, ~30 GB (one fragment).
+
+  * import scales ~linearly with (chrom_length x samples): ~9.7 min/sample for
+    chr1 vs ~1.7 for chr22 (chr1 ~5-6x). Predictable.
+        wave 1  create +47 (47)   460 min import + ~4 s consolidate  (7h40m total)
+        wave 2  update +46 (93)   445 min import + ~815 min CONSOLIDATE
+                                  -> 1260 min GATK, 21h01m step time
+  * CONSOLIDATION IS THE PROBLEM. On `create` (single fresh fragment) it is a
+    ~4 s no-op. On `update` it merges fragments across the WHOLE db: chr1 to 93
+    samples = ~13.5 h. That is WORSE than a full `create` rebuild of 93 samples
+    (~15 h import, trivial consolidate). So:
+      -> updates NEVER consolidate now (launcher wave_consol = wave 1 only).
+         GenotypeGVCFs reads a multi-fragment db fine.
+      -> if you truly want one fragment, REBUILD with `create` (all current
+         samples), do not GENDBI_CONSOLIDATE=true an update.
+  * wave 2 used 21h of its 24h walltime — for a larger cohort or the big
+    chromosomes an update+consolidate would time out. Another reason to drop it.
+  * memory held at Xmx6G through the 21h job (30 GB workspace, 13.5h consolidate)
+    with no OOM at --mem 32G. -Xmx6G / --mem 16-24G is safe even for chr1.
+  * STORAGE PROJECTION: chr1 93 samples = ~30 GB (~332 MB/sample). chr1 is ~8%
+    of the genome -> a full 93-sample WHOLE-GENOME GenomicsDB ~= 375-400 GB.
+    JVCdev has ~27 TB free; fine, but size it into the plan for the real cohort.
+  * setgid on the output dir DID propagate group=amedina to the new files, but
+    GenomicsDB still writes them mode 0700 (no group bits) regardless of umask —
+    so labmates still can't read the db. `amgrp <workspace>` (chmod -R g+rX) is
+    the only fix; run it after each import. (umask alone is not enough.)
+  * `.__consolidation_lock` (0 B) left again — benign, same as chr22.
+  * NB: EGAN00004696518's chr1 GVCF is NORMAL size (no tiny warning in test02).
+    So its BAM is fine — only the chr22 split from Step 03a went wrong for that
+    sample. Fix = re-run 03a (or just the chrom-split) for EGAN00004696518's
+    chr22, then re-import chr22 with action=update.
   * The tiny sample EGAN00004696518 (24 KB) was flagged by both the pre-build
     warning and the finisher, and imported fine (near-empty). Confirm its
     content before trusting it in Step 05.

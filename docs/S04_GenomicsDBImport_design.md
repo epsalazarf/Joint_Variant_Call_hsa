@@ -140,20 +140,31 @@ Java `-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`, `--batch-size 50`
 (imports all samples at once below 50; caps open file handles / memory above
 that), `--genomicsdb-shared-posixfs-optimizations true`.
 
-### `--consolidate` — the dominant cost (test01, jobs 278359-61)
+### `--consolidate` — do not run it on `update`
 
-| wave | action | samples added | db total | wall | consolidate portion |
-|------|--------|---------------|----------|------|---------------------|
-| 1 | create | 31 | 31 | 54 min | ~3 min |
-| 2 | update | 31 | 62 | 147 min | ~96 min |
-| 3 | update | 31 | 93 | 190 min | ~140 min |
+| test | wave | action | db total | wall | consolidate portion |
+|------|------|--------|----------|------|---------------------|
+| 01 chr22 | 1 | create | 31 | 54 min | ~3 s (one fragment) |
+| 01 chr22 | 2 | update | 62 | 147 min | ~96 min |
+| 01 chr22 | 3 | update | 93 | 190 min | ~140 min |
+| 02 chr1 | 1 | create | 47 | 7 h 40 m | ~4 s (one fragment) |
+| 02 chr1 | 2 | update | 93 | **21 h** | **~13.5 h** |
 
-`--consolidate` rewrites the **entire array** into one fragment, so its cost
-scales with **total DB size**, not the wave. S04 now defaults it **on for
-`create`, off for `update`** (`GENDBI_CONSOLIDATE` overrides). For wave imports:
-append fragments on the intermediate waves and run **one** consolidating pass
-(`GENDBI_CONSOLIDATE=true`) on the last wave before Step 05. Un-consolidated
-GenomicsDB reads work — just slightly slower.
+On `create` (a single fresh fragment) `--consolidate` is a no-op. On `update`
+it merges fragments across the **whole array** — and for chr1→93 samples that
+was **13.5 h**, longer than a full `create` rebuild of all 93 samples (~15 h).
+
+**Decision:** `update` waves never consolidate (S04 default; the launcher only
+sets it on wave 1). GenotypeGVCFs reads a multi-fragment DB fine. If a
+single-fragment DB is genuinely wanted (e.g. read performance turns out to
+matter), **rebuild the chromosome with `create` on all current samples** —
+don't `GENDBI_CONSOLIDATE=true` an update.
+
+### Storage
+
+chr1 at 93 samples = **~30 GB** (~332 MB/sample; chr22 was ~57 MB/sample).
+chr1 is ~8% of the genome, so a full 93-sample **whole-genome** GenomicsDB is
+**~375–400 GB**. Size it into the plan for the real cohort.
 
 ### Shared readability
 

@@ -145,14 +145,17 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 #   GENDBI_JAVA_MEM        — Java -Xms/-Xmx                (default 6G remote / 4G local)
 #   GENDBI_STRICT_GVCF     — true: abort on a GVCF that looks truncated;
 #                            false (default): warn and keep it in the cohort
-#   GENDBI_CONSOLIDATE     — pass --consolidate (rewrites the whole array into one
-#                            fragment). Default: true for `create`, FALSE for
-#                            `update`. Consolidation cost scales with TOTAL db
-#                            size, not the wave — on the JAGUAR test it
-#                            added ~1.5-2.3 h per update wave. For many small
-#                            update waves, leave it off and run ONE consolidating
-#                            pass (GENDBI_CONSOLIDATE=true on the last wave)
-#                            before Step 05.
+#   GENDBI_CONSOLIDATE     — pass --consolidate. Default: true for `create` (a
+#                            ~4 s no-op — one fragment), FALSE for `update`.
+#                            On `update` it merges fragments and the cost scales
+#                            with the WHOLE db: JAGUAR chr22 updates ~1.5-2.3 h,
+#                            chr1 update to 93 samples ~13.5 h — worse than a
+#                            full `create` rebuild (~15 h). So: `update` waves
+#                            append fragments and never consolidate;
+#                            GenotypeGVCFs reads a multi-fragment db fine. If a
+#                            single-fragment db is really wanted, rebuild with
+#                            `create` (all current samples) rather than
+#                            GENDBI_CONSOLIDATE=true on an update.
 njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"

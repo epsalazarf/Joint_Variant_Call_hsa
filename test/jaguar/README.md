@@ -46,10 +46,10 @@ squeue -u $USER | grep JVC-GDBI-$CHR
 bash test/jaguar/run_jaguar_waves.sh report            # after all waves finish
 ```
 
-**Wave plan** (built automatically): wave 1 = `create` + `--consolidate`;
-waves 2…N-1 = `update`, no consolidate (just append a fragment); wave N =
-`update` + `--consolidate` (the final array before Step 05). Consolidating waves
-get `2 × --hours` of walltime.
+**Wave plan** (built automatically): wave 1 = `create` (+ `--consolidate`, a
+~4 s no-op on a fresh import); waves 2…N = `update`, **no consolidate** — each
+just appends a fragment. GenotypeGVCFs reads a multi-fragment DB fine.
+Consolidation on `update` is pathologically slow (test02) — never do it.
 
 ## Runs
 
@@ -59,12 +59,12 @@ get `2 × --hours` of walltime.
 
 | wave | db total | wall | |
 |------|----------|------|--|
-| 1 create | 31 | 54 min | consolidated |
-| 2 update | 62 | 147 min | consolidated the whole array |
+| 1 create | 31 | 54 min | consolidate ~3 s |
+| 2 update | 62 | 147 min | consolidate ~96 min (this run still did it) |
 | 3 update | 93 | 190 min | + tiny-sample warning |
 
 - `--consolidate` cost scales with **total** DB size (rewrites the whole array),
-  not the wave → now on for `create` only, plus one final pass.
+  not the wave → now on for `create` only (test02 showed why).
 - more cores/RAM don't help (serial + I/O-bound). `seff`: CPU eff 9.53% at 8
   cores, RAM 6.68 GB. Default 2 CPU / 16 G.
 - `EGAN00004696518` (24 KB, near-empty but valid) flagged by pre-build warning +
@@ -74,12 +74,32 @@ get `2 × --hours` of walltime.
   `~/bin` does this.
 - benign `.__consolidation_lock` (0 B) left in the array dir.
 
-### test02 — chr1, 2 waves  (upper-limit run)
+### test02 — chr1, 2 waves  (jobs 279778-79, 2026-09-03) — PASS
 
-chr1 ≈ 5 × chr22. Fresh build with ~47 samples, one `update` with the other ~46
-(both consolidate — wave 1 create, wave 2 final). Watch: wall time (esp. the
-wave-2 consolidation of all 93), workspace size, `MaxRSS` vs `--mem`, and
-whether the bigger `--cpus` does anything.
+Upper-limit run: chr1 (biggest chromosome), 47 `create` + 46 `update` → 93
+samples, ~30 GB, one fragment. Both waves succeeded.
+
+| wave | action | db total | import | consolidate | step time |
+|------|--------|----------|--------|-------------|-----------|
+| 1 | create | 47 | 460 min | ~4 s | 7 h 41 m |
+| 2 | update | 93 | 445 min | **~13.5 h** | **21 h 01 m** |
+
+**Findings:**
+
+- Import scales ~linearly: ~9.7 min/sample on chr1 (vs ~1.7 on chr22).
+  Predictable from `chrom_length × samples`.
+- **Consolidation on `update` is the bottleneck** — 13.5 h to merge fragments
+  across 93 samples of chr1, *longer than a full `create` rebuild* (~15 h). It's
+  a ~4 s no-op on `create`. → **updates no longer consolidate**; `wave_consol`
+  is wave 1 only. GenotypeGVCFs reads multi-fragment DBs. Rebuild with `create`
+  if you ever need one fragment.
+- Wave 2 used 21 h of its 24 h walltime — an update+consolidate would time out
+  on a bigger cohort. Another reason to drop it.
+- Memory: held at `-Xmx6G` through the 21 h job, no OOM at `--mem 32G`.
+- Storage: ~332 MB/sample on chr1 → whole-genome 93-sample DB ≈ **375–400 GB**.
+- setgid on the output dir set group=`amedina` on the new files, but GenomicsDB
+  still writes them `0700` — run `amgrp <workspace>` after each import so
+  labmates can read it.
 
 ### First run (2026-08-31) — failed on quota, fixed
 
