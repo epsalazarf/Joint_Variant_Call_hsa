@@ -104,6 +104,13 @@ samples, ~30 GB, one fragment. Both waves succeeded.
 - setgid on the output dir set group=`amedina` on the new files, but GenomicsDB
   still writes them `0700` — run `amgrp <workspace>` after each import so
   labmates can read it.
+- **Read check passed** — `SelectVariants` on `chr1:1-500000` returned 169,233
+  records for the 93-sample cohort. The `No valid combination operation found
+  for INFO field DB / InbreedingCoeff / MLEAC / MLEAF` lines are **expected** —
+  those are per-sample annotations GenomicsDB can't merge; GenotypeGVCFs
+  recomputes site-level stats. The read was I/O-bound (~10× wall/CPU in the
+  GenomicsDB iterator, ~8 min warm-up) → **Step 05 should stage the workspace
+  to `/scratch` before reading it** (see review notes).
 
 ### First run (2026-08-31) — failed on quota, fixed
 

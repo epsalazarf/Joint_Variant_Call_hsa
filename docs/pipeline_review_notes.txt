@@ -123,7 +123,13 @@ Guiding philosophy (per maintainer, 2026-08-31):
                             Launcher scales --mem/--time by contig class
                             (chr1-2 64G/20h, chr3-8+X 32G/12h, rest 16G/6h);
                             GENDBI_BATCH_SIZE 50->25 halves import RAM. -Xmx6g.
-    * S05  (est.) ~2-4 CPU / 16-24G per chromosome, GenotypeGVCFs
+    * S05  GenotypeGVCFs, per chromosome. Reading the GenomicsDB from /mnt/data
+           (NFS) is I/O-BOUND: a SelectVariants smoke-test on chr1:1-500000 of
+           the 93-sample db (test02) showed ~10x wall/CPU in the GenomicsDB
+           iterator + an ~8 min one-time warm-up before it sped up. So S05 should
+           STAGE THE WORKSPACE TO /scratch first (same as S04's build does) and
+           read it from there. Est. many hours for chr1. ~2 CPU (serial-ish),
+           mem scales with contig like S04 (start 32-48G for chr1).
     * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
     Scatter by chromosome and submit per-chrom jobs rather than one fat job.
 
