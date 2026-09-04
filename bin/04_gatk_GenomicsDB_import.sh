@@ -66,12 +66,16 @@
 #  FENIX resourcing (per-chromosome job)
 # ---------------------------------------------------------------------------
 #
-#   MEASURED (seff 276894: 31 samples, chr22, 8 cores): CPU efficiency 9.53%,
-#   6.68 GB RAM, 72 min wall. For one interval GenomicsDBImport is effectively
-#   serial (the tail `Consolidating` step) + I/O-bound — extra cores/RAM do not
-#   help. Request small; scale --time with contig size:
-#
-#     --cpus-per-task=2   --mem=16G   (-Xmx6g; ~1.5 h for chr22, the smallest)
+#   MEASURED: CPU is ~10-18% efficient at 4-8 cores (serial + I/O-bound — extra
+#   cores do NOT help; 2 is fine). But RAM and wall-time scale with CONTIG SIZE
+#   (per-sample TileDB data is ~5x bigger on chr1 than chr22):
+#     chr22  31 samp:  6.7 GB RAM,  72 min          (seff 276894)
+#     chr1   47 samp:   27 GB RAM,  7h40m  create    (seff 279778)
+#     chr1   93 samp:   32 GB RAM,  21 h    update+consolidate (seff 279779)
+#   The test/jaguar/run_jaguar_waves.sh launcher sets --mem / --time per contig
+#   class (chr1-2: 64G/20h · chr3-8,X: 32G/12h · rest: 16G/6h). -Xmx stays 6G
+#   (the big footprint is native TileDB, not heap). If --mem is still tight,
+#   drop GENDBI_BATCH_SIZE to 25 — that roughly halves import memory.
 #
 #   The TileDB workspace does many small random reads/writes — bad on NFS — so
 #   this script builds it on /scratch when available and copies the finished

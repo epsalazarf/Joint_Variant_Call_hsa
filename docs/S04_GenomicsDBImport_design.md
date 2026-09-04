@@ -119,26 +119,34 @@ GenomicsDB update path, so GenomicsDB it is — even for the first small test.
 
 ## FENIX resourcing
 
-**Measured** — `seff 276894` (first wave-1 attempt: 31 samples, chr22, `create`,
-8 cores / 32 GB):
+**Measured** (`seff`):
 
-| metric | value | reading |
-|--------|-------|---------|
-| CPU efficiency | 9.53% | ~0.76 core busy over 72 min wall — effectively serial + I/O-bound |
-| Memory used | 6.68 GB / 32 GB | heap need is small; most is native TileDB |
-| Wall clock | 72 min | dominated by the tail `Consolidating GenomicsDB array` step |
+| run | samples | contig | CPU eff (cores) | RAM used | wall |
+|-----|---------|--------|-----------------|----------|------|
+| 276894 | 31 | chr22 | 9.5% (8) | 6.7 GB / 32 | 72 min |
+| 279778 | 47 | chr1 `create` | 17.7% (4) | **27.4 GB / 32** | 7 h 40 m |
+| 279779 | 93 | chr1 `update`+consol | 13.0% (4) | **32.0 GB / 32 (100%)** | 21 h |
 
-GenomicsDBImport for a single interval does not parallelise usefully (the
-consolidate step is serial; the rest is NFS read + BeeGFS write). **Extra cores
-and RAM do not shorten it.** Suggested per-chromosome job:
+Two facts:
 
-```
---cpus-per-task=2   --mem=16G   --time=<scale with contig size; ~1.5 h for chr22>
-```
+1. **Cores don't help** — CPU efficiency is 10–18% however many you give it
+   (serial consolidate + NFS read + BeeGFS write). Use 2.
+2. **RAM and wall-time scale with CONTIG SIZE**, not just sample count — the
+   per-sample TileDB fragment data is ~5× larger on chr1 than chr22. The big
+   footprint is **native TileDB**, not the JVM heap (heap stayed at `-Xmx6g`).
 
-Java `-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`, `--batch-size 50`
-(imports all samples at once below 50; caps open file handles / memory above
-that), `--genomicsdb-shared-posixfs-optimizations true`.
+`test/jaguar/run_jaguar_waves.sh` sets `--mem` / `--time` by contig class:
+
+| class | contigs | `--mem` | `--time` |
+|-------|---------|---------|----------|
+| big | chr1, chr2 | 64G | 20h |
+| mid | chr3–8, chrX | 32G | 12h |
+| small | chr9–22, chrY, chrM | 16G | 6h |
+
+`-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`,
+`--genomicsdb-shared-posixfs-optimizations true`. `--batch-size` defaults to 50;
+drop it to 25 (`--batch 25` / `GENDBI_BATCH_SIZE=25`) to roughly halve import
+memory if `--mem` is still tight.
 
 ### `--consolidate` — do not run it on `update`
 

@@ -16,9 +16,20 @@
 #
 #   -c, --chrom CHR    chromosome (default: chr22)
 #   -w, --waves N      number of waves (default: 3)
-#       --cpus  N      --cpus-per-task per wave (default: 2)
-#       --mem   SIZE   --mem per wave           (default: 16G)
-#       --hours H      --time in hours per wave (default: 4)
+#       --cpus  N      --cpus-per-task per wave (default: 2 — cores don't help)
+#       --mem   SIZE   --mem per wave    (default: chromosome-scaled, see below)
+#       --hours H      --time in hours   (default: chromosome-scaled, see below)
+#       --batch N      GenomicsDBImport --batch-size (default 50; drop to 25 to
+#                      roughly halve import memory on the big chromosomes)
+#
+#   Memory scales with CHROMOSOME SIZE, not just sample count (the per-sample
+#   TileDB fragment data is ~5x bigger on chr1 than chr22). test02: chr1 create
+#   of 47 samples used 27 GB; the update+consolidate hit 32 GB (100%). So the
+#   --mem / --hours defaults below are keyed to the contig:
+#     chr1, chr2                 -> 64G / 20h
+#     chr3-8, chrX               -> 32G / 12h
+#     chr9-22, chrY, chrM        -> 16G /  6h
+#   Override with --mem / --hours for anything unusual.
 #
 #   cohort_root  dir containing bam/<SAMPLE>/chrom_gvcf/...
 #                (default: /mnt/data/amedina/mramirezc/JAGUAR_JVC)
@@ -54,7 +65,19 @@ if [[ "${1:-}" == "report" ]]; then
 fi
 
 # ---------- options --------------------------------------------------------
-CHROM="chr22" ; N_WAVES=3 ; CPUS=2 ; MEM="16G" ; HOURS=4 ; DRY=false
+# --mem / --hours default to a size class keyed on the contig (hg38 lengths):
+#   chr1 chr2  -> the two biggest;  chr3-8 + chrX  -> mid;  rest -> small.
+chrom_class() {
+  case "$1" in
+    chr1|chr2)                                      echo big ;;
+    chr3|chr4|chr5|chr6|chr7|chr8|chrX)             echo mid ;;
+    *)                                              echo small ;;
+  esac
+}
+default_mem()   { case "$(chrom_class "$1")" in big) echo 64G ;; mid) echo 32G ;; *) echo 16G ;; esac; }
+default_hours() { case "$(chrom_class "$1")" in big) echo 20  ;; mid) echo 12  ;; *) echo 6  ;; esac; }
+
+CHROM="chr22" ; N_WAVES=3 ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; DRY=false
 pos=()
 while (( $# )); do
   case "$1" in
@@ -64,7 +87,8 @@ while (( $# )); do
     --cpus)        CPUS="${2:?}"; shift 2 ;;
     --mem)         MEM="${2:?}"; shift 2 ;;
     --hours)       HOURS="${2:?}"; shift 2 ;;
-    -h|--help)     sed -n '3,33p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
+    --batch)       BATCH="${2:?}"; shift 2 ;;
+    -h|--help)     sed -n '3,40p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
     -*)            echo "[X]  unknown option: $1  (--help)"; exit 2 ;;
     *)             pos+=("$1"); shift ;;
   esac
@@ -72,6 +96,8 @@ done
 COHORT_ROOT="${pos[0]:-$DEFAULT_COHORT}"
 OUTPUT_DIR="${pos[1]:-$DEFAULT_OUTPUT_DIR}"
 (( N_WAVES >= 1 )) || { echo "[X]  --waves must be >= 1"; exit 2; }
+MEM="${MEM:-$(default_mem "$CHROM")}"
+HOURS="${HOURS:-$(default_hours "$CHROM")}"
 
 fmt_time() { printf '%d:00:00' "$1"; }   # H -> H:00:00
 
@@ -127,7 +153,7 @@ echo "[&]  JAGUAR ${CHROM} — Step 04 wave launcher   ($TS)"
 echo "[i]  chromosome  : $CHROM     waves: $N_WAVES"
 echo "[i]  cohort_root : $COHORT_ROOT"
 echo "[i]  output_dir  : $OUTPUT_DIR"
-echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h"
+echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h  batch=${BATCH}  ($(chrom_class "$CHROM") chromosome)"
 echo "[i]  logs        : $LOG_DIR"
 echo "[i]  manifest    : $MANIFEST"
 echo "[i]  dry-run     : $DRY"
@@ -142,7 +168,7 @@ for (( w=1; w<=N_WAVES; w++ )); do
   jobname="JVC-GDBI-${CHROM}-w${w}"
   logfile="$LOG_DIR/jaguar-${CHROM}-w${w}-%j.out"
 
-  wrap="env GENDBI_READER_THREADS=${CPUS} GENDBI_CONSOLIDATE=${consol} \
+  wrap="env GENDBI_READER_THREADS=${CPUS} GENDBI_BATCH_SIZE=${BATCH} GENDBI_CONSOLIDATE=${consol} \
 bash '$S04' '$map' '$OUTPUT_DIR' '$CHROM' '$action'"
 
   set -- --parsable --job-name="$jobname" \

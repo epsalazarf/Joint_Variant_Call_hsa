@@ -116,14 +116,13 @@ Guiding philosophy (per maintainer, 2026-08-31):
 [resourcing] Keep per-job requests modest so jobs schedule fast:
     * S02  ~8 CPU / 32G   (MarkDuplicatesSpark heap + GC threads)
     * S03  ~4 CPU / 32G   (--native-pair-hmm-threads 4, -Xmx20G)
-    * S04  ~2 CPU / 16G   (-Xmx6g). MEASURED: seff 276894 (31 samples, chr22,
-                            8 cores) -> CPU efficiency 9.53%, 6.68 GB RAM.
-                            GenomicsDBImport for one interval is effectively
-                            SERIAL (esp. the tail `Consolidating` step) and
-                            I/O-bound (reads GVCFs from NFS, writes TileDB to
-                            scratch). Extra cores/RAM do NOT shorten it.
-                            --reader-threads 2 is plenty; scale --time with
-                            chromosome size (72 min for chr22, the smallest).
+    * S04  2 CPU always (10-18% CPU eff at any core count — serial + I/O-bound).
+                            RAM + wall-time SCALE WITH CONTIG SIZE (native TileDB
+                            fragment data, not heap): chr22 6.7 GB/72 min,
+                            chr1 27 GB/7.7 h create, chr1 32 GB/21 h update+consol.
+                            Launcher scales --mem/--time by contig class
+                            (chr1-2 64G/20h, chr3-8+X 32G/12h, rest 16G/6h);
+                            GENDBI_BATCH_SIZE 50->25 halves import RAM. -Xmx6g.
     * S05  (est.) ~2-4 CPU / 16-24G per chromosome, GenotypeGVCFs
     * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
     Scatter by chromosome and submit per-chrom jobs rather than one fat job.
@@ -240,8 +239,15 @@ choices made with the maintainer:
          samples), do not GENDBI_CONSOLIDATE=true an update.
   * wave 2 used 21h of its 24h walltime — for a larger cohort or the big
     chromosomes an update+consolidate would time out. Another reason to drop it.
-  * memory held at Xmx6G through the 21h job (30 GB workspace, 13.5h consolidate)
-    with no OOM at --mem 32G. -Xmx6G / --mem 16-24G is safe even for chr1.
+  * MEMORY SCALES WITH CONTIG SIZE (seff total RSS, not the JVM heap):
+        chr22 31 samp   6.7 GB / 32 (21%)
+        chr1  47 samp  27.4 GB / 32 (86%)   create      (seff 279778)
+        chr1  93 samp  32.0 GB / 32 (100%!) update+consol (seff 279779)
+    Native TileDB, not heap (heap stayed 6 GB). Per-sample fragment data is ~5x
+    bigger on chr1 than chr22. -> launcher now scales --mem/--time by contig:
+      chr1-2 64G/20h · chr3-8,X 32G/12h · chr9-22,Y,M 16G/6h ; -Xmx stays 6G ;
+      new --batch knob (GENDBI_BATCH_SIZE) — 50->25 roughly halves import RAM.
+    CPU eff 17.7% (create) / 13.0% (update) at 4 cores — cores useless (again).
   * STORAGE PROJECTION: chr1 93 samples = ~30 GB (~332 MB/sample). chr1 is ~8%
     of the genome -> a full 93-sample WHOLE-GENOME GenomicsDB ~= 375-400 GB.
     JVCdev has ~27 TB free; fine, but size it into the plan for the real cohort.
