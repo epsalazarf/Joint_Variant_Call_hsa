@@ -1,25 +1,49 @@
-# JAGUAR — Step 04 (GenomicsDBImport) test harness
+# Step 04 (GenomicsDBImport) test harness
 
-Wave-based validation of `bin/04_gatk_GenomicsDB_import.sh` on FENIX, using the
-JAGUAR cohort (93 WGS samples, `/mnt/data/amedina/mramirezc/JAGUAR_JVC`). One
-chromosome at a time; the cohort is split into N sequential "waves" so the
-incremental (`update`) path gets exercised.
+Wave-based validation of `bin/04_gatk_GenomicsDB_import.sh` on FENIX. Started
+with the JAGUAR cohort (93 WGS samples), now also validated against the SLE
+cohort (much larger and structurally messier — see test03). Any cohort works:
+sample discovery **scans** the given `--cohort` root recursively for
+`.../chrom_gvcf/*.<chrom>.g.vcf.gz`, so it doesn't care about directory depth
+or GVCF filename conventions (see "Cohort assumptions" below).
 
-Everything is chromosome-parameterised — `--chrom chrN`. Output for every run
-goes to `/mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22/genomicsdb/<chrN>/`
-(group storage — **never** the repo / `$HOME`; per-chromosome workspaces sit
-side by side there).
+Everything is parameterised — `--chrom chrN`, `--waves N`, `--tag NAME`. `--tag`
+namespaces the wave-map / job / log / manifest filenames so more than one
+cohort's test artifacts can live in this directory at once without colliding
+(default `jaguar`; use e.g. `--tag sle` for a different cohort). Output for
+every run goes to `/mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22/genomicsdb/<chrN>/`
+(group storage — **never** the repo / `$HOME`; per-chromosome workspaces from
+different test runs sit side by side there — mind `--output` if you don't want
+that).
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `make_wave_maps.sh` | scan the cohort for `*.<chrom>.g.vcf.gz` and write N wave sample-maps |
+| `make_wave_maps.sh` | scan a cohort for `*.<chrom>.g.vcf.gz` and write N wave sample-maps |
 | `check_setup.sh` | read-only pre-flight sweep — run before launching |
 | `run_jaguar_waves.sh` | submit the N chained SLURM jobs (`--dry-run` / `report` modes) |
-| `JAGUAR_JVC_chr22_list.txt` | the original chr22 `ls -l` listing (reference; scan mode doesn't need it) |
+| `JAGUAR_JVC_chr22_list.txt` | the original JAGUAR chr22 `ls -l` listing (reference only; scan mode doesn't need it) |
 
-Generated at run time, git-ignored: `jaguar_<chrom>_wave*.sample_map.tsv`, `logs/`.
+Generated at run time, git-ignored: `<tag>_<chrom>_wave*.sample_map.tsv`, `logs/`.
+
+## Cohort assumptions (what the scan needs, and what it doesn't)
+
+- Needs: somewhere under `--cohort`, a directory named `chrom_gvcf/` per sample,
+  containing exactly one `*.<chrom>.g.vcf.gz` (+ `.tbi`) for that sample.
+- Does **not** need: a fixed depth (JAGUAR: `bam/<S>/chrom_gvcf`; SLE:
+  `BAMQC/BatchNN/<S>/chrom_gvcf`), or the GVCF filename to start with the
+  sample/directory name (SLE prefixes vary — `L46_1`, `Q005_D_2`,
+  `Q00a_D_1`, ...). The **label** used in the sample map is always the
+  `chrom_gvcf/`'s parent directory name; Step 04 re-derives the real sample
+  name from the GVCF header regardless, so a label/header mismatch is only
+  ever a warning, never an error.
+- A sample directory with no GVCF for the requested chromosome yet (pipeline
+  still running) is silently skipped, not an error — the scan only finds what
+  exists.
+- Two different `chrom_gvcf/` dirs with the **same** parent directory name
+  (e.g. reused across two batches) is a hard error — check for a genuine ID
+  collision before renaming/merging.
 
 ## Run it (on FENIX)
 
@@ -27,23 +51,26 @@ Generated at run time, git-ignored: `jaguar_<chrom>_wave*.sample_map.tsv`, `logs
 cd /path/to/repo && git pull
 
 CHR=chr1        # or chr22, chrX, ...
-WAVES=2         # 93 samples -> 47 + 46
+WAVES=2
+TAG=jaguar      # or e.g. sle — keeps artifacts from different cohorts apart
+COHORT=/mnt/data/amedina/mramirezc/JAGUAR_JVC   # cohort root to scan
 
 # 1. wave maps (scans the cohort directly)
-bash test/jaguar/make_wave_maps.sh --chrom $CHR --waves $WAVES
+bash test/jaguar/make_wave_maps.sh --chrom $CHR --waves $WAVES --tag $TAG --cohort $COHORT
 
 # 2. pre-flight — resolve any FAIL (a known tiny/truncated GVCF is an OK WARN)
-bash test/jaguar/check_setup.sh --chrom $CHR
+bash test/jaguar/check_setup.sh --chrom $CHR --tag $TAG
 
 # 3. see the exact sbatch commands
-bash test/jaguar/run_jaguar_waves.sh --dry-run --chrom $CHR --waves $WAVES
+bash test/jaguar/run_jaguar_waves.sh --dry-run --chrom $CHR --waves $WAVES --tag $TAG $COHORT
 
 # 4. submit  (add --cpus / --mem / --hours to push the envelope)
-bash test/jaguar/run_jaguar_waves.sh --chrom $CHR --waves $WAVES --cpus 4 --mem 32G --hours 12
+bash test/jaguar/run_jaguar_waves.sh --chrom $CHR --waves $WAVES --tag $TAG $COHORT
 
 # monitor / timings
-squeue -u $USER | grep JVC-GDBI-$CHR
-bash test/jaguar/run_jaguar_waves.sh report            # after all waves finish
+squeue -u $USER | grep JVC-GDBI-$TAG-$CHR
+bash test/jaguar/run_jaguar_waves.sh report            # latest manifest across ALL tags
+bash test/jaguar/run_jaguar_waves.sh report logs/<tag>_run_<chrom>_<timestamp>.manifest  # a specific one
 ```
 
 **Wave plan** (built automatically): wave 1 = `create` (+ `--consolidate`, a
@@ -111,6 +138,57 @@ samples, ~30 GB, one fragment. Both waves succeeded.
   recomputes site-level stats. The read was I/O-bound (~10× wall/CPU in the
   GenomicsDB iterator, ~8 min warm-up) → **Step 05 should stage the workspace
   to `/scratch` before reading it** (see review notes).
+
+### test03 — SLE cohort, chr22 (heterogeneous cohort / harness-generality test)
+
+Purpose: stress the harness itself, not just S04 — the SLE cohort is larger and
+structurally messier than JAGUAR, so it's a good check that the scripts don't
+silently assume JAGUAR's layout.
+
+Cohort snapshot (`SLEmx-b38_list.txt`, 2026-09): ~127 sample directories across
+13 batches, but only **52** currently have a `chr22` GVCF+index (Batches
+05/06/08/09/12/15 haven't reached Step 03a yet for chr22 — expected to be
+skipped by the scan, not treated as an error). Confirmed quirks the harness now
+handles:
+
+- **Different directory depth** than JAGUAR: `BAMQC/BatchNN/<sample>/chrom_gvcf/`
+  instead of `bam/<sample>/chrom_gvcf/`. `make_wave_maps.sh`'s scan is now fully
+  recursive (`find --cohort -path '*/chrom_gvcf/*.<chrom>.g.vcf.gz'`) instead of
+  assuming a `bam/` root.
+- **GVCF filename ≠ sample/directory name**: `L46/chrom_gvcf/L46_1.raw_vars...`,
+  `Q005/chrom_gvcf/Q005_D_2.raw_vars...`, prefixes also seen: `_1`, `_2`, `_5`,
+  `_D_1`, `_D_2`, `_D_3`. `make_wave_maps.sh` and `check_setup.sh` previously
+  reconstructed the expected filename as `<label>.raw_vars.<chrom>.g.vcf.gz` —
+  **wrong** for this cohort. Fixed to glob `*.<chrom>.g.vcf.gz` inside the
+  directory instead (matches how Step 04 itself already resolved the file).
+- Inconsistent sample-ID punctuation even within one batch: `Q005` vs `Q_034`
+  vs `Q00a`. Harmless — the directory name is just used as an opaque label.
+- One sample dir (`Q_034`) is empty (no GVCF yet) — scan skips it, no crash.
+- No duplicate sample labels across batches, no ambiguous (>1 file) `chrom_gvcf/`
+  dirs, no missing `.tbi` — checked directly against the file listing.
+- Coverage is more heterogeneous than JAGUAR: chr22 GVCF sizes range
+  10.1–53.3 MB (JAGUAR was a tighter 34–61 MB band) — a real test of the
+  tiny-file heuristic's threshold on a noisier size distribution; no false
+  positive at the current 50%-of-median cutoff.
+
+Added `--tag` (default `jaguar`) to `make_wave_maps.sh` / `check_setup.sh` /
+`run_jaguar_waves.sh` so this cohort's maps/jobs/logs/manifest
+(`sle_chr22_wave*.sample_map.tsv`, `JVC-GDBI-sle-chr22-w*`, etc.) don't collide
+with JAGUAR's in this same directory.
+
+Run (needs the SLE cohort root path on FENIX — ask the maintainer if unset):
+
+```bash
+COHORT=<absolute path to the dir containing SLEmx-b38/>
+bash test/jaguar/make_wave_maps.sh --chrom chr22 --waves 3 --tag sle --cohort "$COHORT/SLEmx-b38/BAMQC"
+bash test/jaguar/check_setup.sh --chrom chr22 --tag sle
+bash test/jaguar/run_jaguar_waves.sh --dry-run --chrom chr22 --waves 3 --tag sle "$COHORT/SLEmx-b38/BAMQC"
+bash test/jaguar/run_jaguar_waves.sh --chrom chr22 --waves 3 --tag sle "$COHORT/SLEmx-b38/BAMQC"
+```
+
+52 samples / 3 waves ≈ 18 samples per wave — smaller per-wave than JAGUAR
+(31) despite the larger cohort, since ~75 sample dirs aren't chr22-ready yet.
+Results TBD.
 
 ### First run (2026-08-31) — failed on quota, fixed
 

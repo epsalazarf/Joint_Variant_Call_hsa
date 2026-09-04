@@ -6,7 +6,8 @@
 #         Nothing here writes data or submits jobs.
 # Usage : bash check_setup.sh [options]
 #   -c, --chrom  CHR     chromosome (default: chr22)
-#       --maps-dir DIR   where jaguar_<chrom>_wave*.sample_map.tsv live
+#   -t, --tag    NAME    cohort tag, matches make_wave_maps.sh (default: jaguar)
+#       --maps-dir DIR   where <tag>_<chrom>_wave*.sample_map.tsv live
 #                        (default: next to this script)
 #       --output DIR     where Step 04 will create genomicsdb/<CHR>
 #                        (default: /mnt/data/amedina/$USER/JVCdev/test_gendbi_jag22)
@@ -19,15 +20,17 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 
 CHROM="chr22"
+TAG="jaguar"
 MAPS_DIR="$HERE"
 OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag22"
 
 while (( $# )); do
   case "$1" in
     -c|--chrom)   CHROM="${2:?}"; shift 2 ;;
+    -t|--tag)     TAG="${2:?}"; shift 2 ;;
     --maps-dir)   MAPS_DIR="${2:?}"; shift 2 ;;
     --output)     OUTPUT_DIR="${2:?}"; shift 2 ;;
-    -h|--help)    sed -n '3,15p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '3,16p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
     # legacy positional form: check_setup.sh [maps_dir] [output_dir]
     /*|./*)       MAPS_DIR="$1"; shift; [[ "${1:-}" ]] && { OUTPUT_DIR="$1"; shift; } ;;
     *)            echo "unknown argument: $1  (--help)" >&2; exit 2 ;;
@@ -44,7 +47,7 @@ W(){ echo "  [WARN] $*"; ((warn++)); }
 F(){ echo "  [FAIL] $*"; ((fail++)); }
 hd(){ echo; echo "== $* =="; }
 
-echo "JAGUAR Step-04 pre-flight — chrom=$CHROM  maps=$MAPS_DIR  output=$OUTPUT_DIR"
+echo "Step-04 pre-flight — tag=$TAG  chrom=$CHROM  maps=$MAPS_DIR  output=$OUTPUT_DIR"
 
 # --- environment ----------------------------------------------------------------
 hd "Environment"
@@ -121,7 +124,7 @@ fi
 # --- wave maps + every referenced GVCF -----------------------------------------
 hd "Wave maps + GVCFs"
 shopt -s nullglob
-maps=( "$MAPS_DIR"/jaguar_${CHROM}_wave*.sample_map.tsv )
+maps=( "$MAPS_DIR"/${TAG}_${CHROM}_wave*.sample_map.tsv )
 shopt -u nullglob
 if (( ${#maps[@]} == 0 )); then
   F "no wave maps in $MAPS_DIR — run make_wave_maps.sh first"
@@ -131,8 +134,8 @@ else
   for m in "${maps[@]}"; do
     while IFS=$'\t' read -r label dir _ || [[ -n "${label:-}" ]]; do
       [[ -z "${label// }" || "$label" == \#* ]] && continue
-      g="$dir/$label.raw_vars.$CHROM.g.vcf.gz"
-      [[ -f "$g" ]] && { stat -c%s "$g" 2>/dev/null || stat -f%z "$g"; } >> "$szfile"
+      shopt -s nullglob; g_hits=( "$dir"/*."$CHROM".g.vcf.gz ); shopt -u nullglob
+      [[ ${#g_hits[@]} -eq 1 ]] && { stat -c%s "${g_hits[0]}" 2>/dev/null || stat -f%z "${g_hits[0]}"; } >> "$szfile"
     done < "$m"
   done
   MEDIAN=$(sort -n "$szfile" | awk '{v[NR]=$1} END{if(NR)print (NR%2)?v[(NR+1)/2]:int((v[NR/2]+v[NR/2+1])/2); else print 0}')
@@ -147,8 +150,10 @@ else
     dupes=0 miss=0 noidx=0 trunc=0 badsm=0 small=0
     while IFS=$'\t' read -r label dir _ || [[ -n "${label:-}" ]]; do
       [[ -z "${label// }" || "$label" == \#* ]] && continue
-      g="$dir/$label.raw_vars.$CHROM.g.vcf.gz"
-      if [[ ! -f "$g" ]]; then F "  $label: GVCF not found ($g)"; ((miss++)); continue; fi
+      shopt -s nullglob; g_hits=( "$dir"/*."$CHROM".g.vcf.gz ); shopt -u nullglob
+      if [[ ${#g_hits[@]} -eq 0 ]]; then F "  $label: no *.${CHROM}.g.vcf.gz in $dir"; ((miss++)); continue; fi
+      if [[ ${#g_hits[@]} -gt 1 ]]; then F "  $label: ${#g_hits[@]} ambiguous matches in $dir"; ((miss++)); continue; fi
+      g="${g_hits[0]}"
       sz=$(stat -c%s "$g" 2>/dev/null || stat -f%z "$g")
       [[ -s "$g.tbi" || -s "$g.csi" ]] || { W "  $label: no .tbi/.csi index"; ((noidx++)); }
       tailhex=$(tail -c 28 "$g" 2>/dev/null | od -An -v -tx1 | tr -d ' \n')

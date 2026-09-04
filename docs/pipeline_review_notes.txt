@@ -302,6 +302,38 @@ choices made with the maintainer:
     sun.misc.Unsafe::arrayBaseOffset) are HARMLESS — GATK 4.6 targets JDK 17
     and the pipeline loads oracle-java/25. Not worth patching --java-options.
 
+  TEST03 PREPARED 2026-09-04 — SLE cohort, chr22 (harness generality test, not
+  run yet). SLE (SLEmx-b38_list.txt) is bigger and structurally messier than
+  JAGUAR: ~127 sample dirs / 13 batches, only 52 chr22-ready so far (rest still
+  in Step 03a). Found + fixed TWO real bugs in the test harness while preparing
+  this (S04 itself was already correct — it globs `*.<chrom>.g.vcf.gz`, never
+  assumed a filename):
+  * make_wave_maps.sh scanned only `<cohort>/bam/*/chrom_gvcf/...` (JAGUAR's
+    layout). SLE is `<cohort>/BAMQC/BatchNN/<sample>/chrom_gvcf/...` — different
+    depth. Fixed: fully recursive `find --cohort -path '*/chrom_gvcf/*.<chrom>.
+    g.vcf.gz'`, no assumption about what's above chrom_gvcf/.
+  * make_wave_maps.sh AND check_setup.sh both reconstructed the GVCF filename as
+    `<label>.raw_vars.<chrom>.g.vcf.gz` to check it exists / read its size. SLE
+    filenames don't start with the sample/dir name at all (`L46/chrom_gvcf/
+    L46_1.raw_vars...`, `Q005/chrom_gvcf/Q005_D_2.raw_vars...` — suffixes seen:
+    _1, _2, _5, _D_1, _D_2, _D_3). Fixed: both now glob `*.<chrom>.g.vcf.gz`
+    inside the directory (matching how S04 already resolves it) instead of
+    reconstructing a filename. LESSON: never assume a GVCF filename encodes the
+    sample name losslessly — only the directory structure + the GVCF header do.
+  * Added --tag (default "jaguar") to all three scripts so a second cohort's
+    wave-maps/job-names/logs/manifest (sle_chr22_wave*.sample_map.tsv,
+    JVC-GDBI-sle-chr22-w*, ...) don't collide with the first cohort's in the
+    same test/jaguar/ directory.
+  * make_wave_maps.sh now hard-errors on a duplicate sample label (same
+    chrom_gvcf/ parent dir name reused under two different paths) instead of
+    silently overwriting one with the other in the map.
+  * A sample dir with an empty/absent chrom_gvcf (Q_034 — Step 03a not done for
+    it yet) is silently skipped by the scan, not an error — correct, since a
+    real cohort's samples finish 03a at different times.
+  * Not blocking: needed the SLE cohort's absolute root path on FENIX to
+    actually run it (list only has relative `./SLEmx-b38/...` paths) — ask the
+    maintainer before launching.
+
 
 -------------------------------------------------------------------------------
  5. FUTURE TASKS
@@ -329,5 +361,11 @@ choices made with the maintainer:
       * wire it into PIPELINE.single_sample.sh / run_pipeline.sh as a
         preflight gate (opt-out flag), and document a standalone
         "run this before you start" invocation in INSTRUCTIONS.md.
+      * LESSON from TEST03 (SLE cohort): never assume an input FILENAME encodes
+        the sample name or a fixed directory depth — different cohorts/batches
+        name things differently (see the S04 GenomicsDBImport TEST03 note
+        above). Discover by structure (a known marker filename/dir like
+        chrom_gvcf/, globbed) and confirm identity from file CONTENT (GVCF/BAM
+        header) wherever possible, never by parsing the path.
 
 ===============================================================================

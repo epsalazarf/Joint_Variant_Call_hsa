@@ -16,6 +16,8 @@
 #
 #   -c, --chrom CHR    chromosome (default: chr22)
 #   -w, --waves N      number of waves (default: 3)
+#   -t, --tag   NAME   cohort tag — namespaces maps/jobs/logs/manifest so two
+#                      cohorts tested in this dir don't collide (default: jaguar)
 #       --cpus  N      --cpus-per-task per wave (default: 2 — cores don't help)
 #       --mem   SIZE   --mem per wave    (default: chromosome-scaled, see below)
 #       --hours H      --time in hours   (default: chromosome-scaled, see below)
@@ -50,7 +52,7 @@ DEFAULT_OUTPUT_DIR="/mnt/data/amedina/${USER:-esalazarf}/JVCdev/test_gendbi_jag2
 
 # ---------- report mode (before option parsing) -----------------------------
 if [[ "${1:-}" == "report" ]]; then
-  manifest="${2:-$(ls -t "$LOG_DIR"/jaguar_run_*.manifest 2>/dev/null | head -1 || true)}"
+  manifest="${2:-$(ls -t "$LOG_DIR"/*_run_*.manifest 2>/dev/null | head -1 || true)}"
   [[ -s "${manifest:-}" ]] || { echo "[X]  no manifest found (looked in $LOG_DIR)"; exit 1; }
   echo "[i]  manifest: $manifest"; echo
   jids=$(awk -F'\t' '/^wave/{print $3}' "$manifest" | paste -sd, -)
@@ -77,18 +79,19 @@ chrom_class() {
 default_mem()   { case "$(chrom_class "$1")" in big) echo 64G ;; mid) echo 32G ;; *) echo 16G ;; esac; }
 default_hours() { case "$(chrom_class "$1")" in big) echo 20  ;; mid) echo 12  ;; *) echo 6  ;; esac; }
 
-CHROM="chr22" ; N_WAVES=3 ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; DRY=false
+CHROM="chr22" ; N_WAVES=3 ; TAG="jaguar" ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; DRY=false
 pos=()
 while (( $# )); do
   case "$1" in
     --dry-run)     DRY=true; shift ;;
     -c|--chrom)    CHROM="${2:?}"; shift 2 ;;
     -w|--waves)    N_WAVES="${2:?}"; shift 2 ;;
+    -t|--tag)      TAG="${2:?}"; shift 2 ;;
     --cpus)        CPUS="${2:?}"; shift 2 ;;
     --mem)         MEM="${2:?}"; shift 2 ;;
     --hours)       HOURS="${2:?}"; shift 2 ;;
     --batch)       BATCH="${2:?}"; shift 2 ;;
-    -h|--help)     sed -n '3,40p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
+    -h|--help)     sed -n '3,42p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
     -*)            echo "[X]  unknown option: $1  (--help)"; exit 2 ;;
     *)             pos+=("$1"); shift ;;
   esac
@@ -130,26 +133,27 @@ wave_time()    { fmt_time "$HOURS"; }
 # ---------- maps: build if absent --------------------------------------------
 need_maps=false
 for (( w=1; w<=N_WAVES; w++ )); do
-  [[ -s "$MAPS_DIR/jaguar_${CHROM}_wave${w}.sample_map.tsv" ]] || need_maps=true
+  [[ -s "$MAPS_DIR/${TAG}_${CHROM}_wave${w}.sample_map.tsv" ]] || need_maps=true
 done
 if $need_maps; then
-  echo "[i]  wave maps missing for ${CHROM} — generating with make_wave_maps.sh"
-  bash "$HERE/make_wave_maps.sh" --chrom "$CHROM" --waves "$N_WAVES" --cohort "$COHORT_ROOT" --out "$MAPS_DIR"
+  echo "[i]  wave maps missing for ${TAG}/${CHROM} — generating with make_wave_maps.sh"
+  bash "$HERE/make_wave_maps.sh" --chrom "$CHROM" --waves "$N_WAVES" --tag "$TAG" --cohort "$COHORT_ROOT" --out "$MAPS_DIR"
   echo
 fi
 
 # ---------- submit -----------------------------------------------------------
 TS="$(date +%Y%m%d-%H%M%S)"
-MANIFEST="$LOG_DIR/jaguar_run_${CHROM}_${TS}.manifest"
+MANIFEST="$LOG_DIR/${TAG}_run_${CHROM}_${TS}.manifest"
 {
-  echo -e "# JAGUAR ${CHROM} Step-04 wave run\t$TS"
+  echo -e "# ${TAG} ${CHROM} Step-04 wave run\t$TS"
   echo -e "# cohort_root\t$COHORT_ROOT"
   echo -e "# output_dir\t$OUTPUT_DIR"
   echo -e "# s04\t$S04"
   echo -e "# columns: wave\taction\tjobid\tcpus\tmem\ttime\tconsolidate\tmap\tlogfile"
 } > "$MANIFEST"
 
-echo "[&]  JAGUAR ${CHROM} — Step 04 wave launcher   ($TS)"
+echo "[&]  ${TAG} ${CHROM} — Step 04 wave launcher   ($TS)"
+echo "[i]  tag         : $TAG"
 echo "[i]  chromosome  : $CHROM     waves: $N_WAVES"
 echo "[i]  cohort_root : $COHORT_ROOT"
 echo "[i]  output_dir  : $OUTPUT_DIR"
@@ -162,11 +166,11 @@ echo
 dep="" ; SUBMITTED=()
 for (( w=1; w<=N_WAVES; w++ )); do
   action="$(wave_action "$w")" ; consol="$(wave_consol "$w")" ; wtime="$(wave_time "$w")"
-  map="$MAPS_DIR/jaguar_${CHROM}_wave${w}.sample_map.tsv"
+  map="$MAPS_DIR/${TAG}_${CHROM}_wave${w}.sample_map.tsv"
   [[ -s "$map" ]] || { echo "[X]  missing map: $map"; exit 1; }
   nsamp=$(grep -cvE '^[[:space:]]*(#|$)' "$map")
-  jobname="JVC-GDBI-${CHROM}-w${w}"
-  logfile="$LOG_DIR/jaguar-${CHROM}-w${w}-%j.out"
+  jobname="JVC-GDBI-${TAG}-${CHROM}-w${w}"
+  logfile="$LOG_DIR/${TAG}-${CHROM}-w${w}-%j.out"
 
   wrap="env GENDBI_READER_THREADS=${CPUS} GENDBI_BATCH_SIZE=${BATCH} GENDBI_CONSOLIDATE=${consol} \
 bash '$S04' '$map' '$OUTPUT_DIR' '$CHROM' '$action'"
@@ -195,9 +199,9 @@ echo
 if $DRY; then
   echo "[i]  dry run — nothing submitted. Manifest: $MANIFEST"
 else
-  echo "[i]  Monitor:  squeue -u \$USER | grep JVC-GDBI-${CHROM}"
+  echo "[i]  Monitor:  squeue -u \$USER | grep JVC-GDBI-${TAG}-${CHROM}"
   echo "[i]            squeue -j $(IFS=,; echo "${SUBMITTED[*]}")"
-  echo "[i]  Logs:     $LOG_DIR/jaguar-${CHROM}-w*-<jobid>.out"
+  echo "[i]  Logs:     $LOG_DIR/${TAG}-${CHROM}-w*-<jobid>.out"
   echo "[i]  Timings:  bash $(basename "$0") report $MANIFEST      # after all $N_WAVES finish"
   echo "[i]  A failed wave leaves the rest PENDING (DependencyNeverSatisfied);"
   echo "[i]  fix it, then resubmit from that wave with action=update."
