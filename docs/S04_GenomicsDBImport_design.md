@@ -162,11 +162,54 @@ On `create` (a single fresh fragment) `--consolidate` is a no-op. On `update`
 it merges fragments across the **whole array** — and for chr1→93 samples that
 was **13.5 h**, longer than a full `create` rebuild of all 93 samples (~15 h).
 
+**The `update` import itself is not slow.** Breaking down the chr1 wave-2 log
+(`Consolidating GenomicsDB array` is logged when the import phase ends):
+
+| phase | chr1 wave 2 (46 samples added, db→93) |
+|-------|--------------------------------------|
+| import (read 46 GVCFs, write new fragment) | 20:16 → 03:41 ≈ **7 h 25 m** |
+| `--consolidate` (rewrite the whole 93-sample array) | 03:41 → 17:16 ≈ **13 h 35 m** |
+
+The import phase (~7.4 h for 46 samples) is essentially the same rate as
+wave 1's fresh build (~7.7 h for 47). All of the "3× slower" is the
+consolidation tail. `seff` memory hit **100 %** (32 GB / 32 GB) — but wave 1
+(import only) was 85 % (27 GB), so the last 5 GB is consolidation working set.
+CPU efficiency was 13–18 % throughout — this is **not compute-bound**; the
+consolidation is TileDB doing a multi-way merge-rewrite of ~30 GB of fragment
+data, dominated by BeeGFS I/O and its own bookkeeping, not the JVM.
+
+**Would more RAM help?** Only if it is *swapping*. `seff` peak-RSS can't tell
+you that — use `GENDBI_PROFILE=true` (below) on the next run: if `vmswap_kb`
+stays ~0, the 100 % is page-cache/working-set that fits and more RAM buys
+nothing; if it climbs, bump `--mem`. Either way, since `update` no longer
+consolidates, the number that matters going forward is the **import** peak
+(chr1 create: 27 GB at 47 samples), and the launcher's contig-scaled `--mem`
+(64 G for chr1/chr2) already covers it — `--batch 25` halves it further if not.
+
 **Decision:** `update` waves never consolidate (S04 default; the launcher only
 sets it on wave 1). GenotypeGVCFs reads a multi-fragment DB fine. If a
 single-fragment DB is genuinely wanted (e.g. read performance turns out to
 matter), **rebuild the chromosome with `create` on all current samples** —
 don't `GENDBI_CONSOLIDATE=true` an update.
+
+### Profiling a run (`GENDBI_PROFILE=true` / `--profile`)
+
+Samples the GenomicsDBImport JVM every 60 s (`GENDBI_PROFILE_INTERVAL`) to
+`<output>/gendbi_profile_<chrom>_<jobid>.csv`:
+`epoch,iso,vmrss_kb,vmswap_kb,vmsize_kb,threads,io_rchar,io_wchar,io_read_bytes,io_write_bytes`
+and runs GATK at `--verbosity INFO` so the log carries per-batch and
+consolidation timings. This turns "seff says 100 %" into an actual
+memory-and-I/O-over-time curve, and shows exactly when import ends / consolidate
+begins. Linux `/proc` only (i.e. on FENIX; a no-op elsewhere).
+
+For a run that already finished, `sacct` has more than `seff` shows:
+
+```
+sacct -j <jobid> --units=G -o JobID,Elapsed,TotalCPU,MaxRSS,MaxVMSize,MaxDiskRead,MaxDiskWrite,ReqMem,State
+```
+
+`MaxDiskRead` / `MaxDiskWrite` give the total I/O volume; `MaxVMSize` vs
+`MaxRSS` shows how much is resident vs just mapped.
 
 ### Storage
 

@@ -160,13 +160,24 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 #                            single-fragment db is really wanted, rebuild with
 #                            `create` (all current samples) rather than
 #                            GENDBI_CONSOLIDATE=true on an update.
+#   GENDBI_PROFILE         — true: sample the GenomicsDBImport JVM's RSS / swap /
+#                            threads / disk I/O every GENDBI_PROFILE_INTERVAL
+#                            seconds (default 60) to a CSV next to the output,
+#                            and bump --verbosity to INFO so GATK logs per-batch
+#                            + consolidation timings. Default false.
+#   GENDBI_VERBOSITY       — GenomicsDBImport --verbosity (default ERROR)
 njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"
+PROFILE="${GENDBI_PROFILE:-false}"
+PROFILE_INTERVAL="${GENDBI_PROFILE_INTERVAL:-60}"
+VERBOSITY="${GENDBI_VERBOSITY:-ERROR}"
+[[ "$PROFILE" == "true" && "$VERBOSITY" == "ERROR" ]] && VERBOSITY=INFO
 if [[ "$ACTION" == "create" ]]; then CONSOLIDATE="${GENDBI_CONSOLIDATE:-true}"
 else                                 CONSOLIDATE="${GENDBI_CONSOLIDATE:-false}"; fi
 TRUNCATED_SEEN=""   # labels of samples whose GVCF looked truncated (warn mode)
 SMALL_SEEN=""       # labels of samples whose GVCF is a valid but tiny outlier
+PROFILE_PID=""      # background resource sampler (GENDBI_PROFILE=true)
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -180,7 +191,7 @@ else
   MEM="${GENDBI_JAVA_MEM:-4G}"
 fi
 echo "[i]  Environment: $env_type"
-echo "[i]  Knobs      : reader-threads=${njobs}  batch-size=${BATCH_SIZE}  java-mem=${MEM}  consolidate=${CONSOLIDATE}  strict-gvcf=${STRICT_GVCF}"
+echo "[i]  Knobs      : reader-threads=${njobs}  batch-size=${BATCH_SIZE}  java-mem=${MEM}  consolidate=${CONSOLIDATE}  strict-gvcf=${STRICT_GVCF}  verbosity=${VERBOSITY}  profile=${PROFILE}"
 
 # Parse YAML config into Bash variables (embedded parser — no external tool)
 eval "$(
@@ -233,6 +244,7 @@ echo "[i]  Scratch    : ${USE_SCRATCH}  (${SCRATCH_BASE})"
 GDB_BUILT=false
 cleanup() {
   local rc=$?
+  [[ -n "${PROFILE_PID:-}" ]] && kill "$PROFILE_PID" 2>/dev/null || true
   if (( rc != 0 )) && [[ "$GDB_BUILT" == true && -d "$SCRATCH_BASE/gdb" ]] \
        && find "$SCRATCH_BASE/gdb" -name callset.json -print -quit 2>/dev/null | grep -q .; then
     echo
@@ -377,6 +389,35 @@ build_chrom_sample_map() {
   echo "[i]    $chr: $count samples -> $dest"
 }
 
+## Background resource sampler (GENDBI_PROFILE=true). Every $2 seconds, writes
+## the running GenomicsDBImport JVM's RSS / swap / thread count / cumulative
+## disk I/O to $1 (CSV). Loops until killed by cleanup(). Linux /proc only.
+profile_poller() {
+  local csv="$1" interval="${2:-60}" pid=""
+  echo "epoch,iso,vmrss_kb,vmswap_kb,vmsize_kb,threads,io_rchar,io_wchar,io_read_bytes,io_write_bytes" > "$csv"
+  while :; do
+    if [[ -z "$pid" || ! -d "/proc/$pid" ]]; then
+      pid="$(pgrep -f 'java .*gatk-package.*GenomicsDBImport' 2>/dev/null | head -1 || true)"
+    fi
+    if [[ -n "$pid" && -r "/proc/$pid/status" ]]; then
+      local S I
+      S="$(cat "/proc/$pid/status" 2>/dev/null || true)"
+      I="$(cat "/proc/$pid/io" 2>/dev/null || true)"
+      printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$(date +%s)" "$(date -Is 2>/dev/null || date +%FT%T)" \
+        "$(awk '/^VmRSS:/{print $2}'       <<<"$S")" \
+        "$(awk '/^VmSwap:/{print $2}'      <<<"$S")" \
+        "$(awk '/^VmSize:/{print $2}'      <<<"$S")" \
+        "$(awk '/^Threads:/{print $2}'     <<<"$S")" \
+        "$(awk '/^rchar:/{print $2}'       <<<"$I")" \
+        "$(awk '/^wchar:/{print $2}'       <<<"$I")" \
+        "$(awk '/^read_bytes:/{print $2}'  <<<"$I")" \
+        "$(awk '/^write_bytes:/{print $2}' <<<"$I")" >> "$csv"
+    fi
+    sleep "$interval"
+  done
+}
+
 ## Import one chromosome into its own GenomicsDB workspace.
 import_one_chrom() {
   local req="$1"
@@ -392,6 +433,7 @@ import_one_chrom() {
   local ws_final="${OUTPUT_PATH}/genomicsdb/${chr}"
   local ws_work="${SCRATCH_BASE}/gdb/${chr}"
   local map="${SCRATCH_BASE}/maps/${chr}.sample_map.tsv"
+  local prof_csv=""
 
   echo
   echo "[*]  Chromosome ${req}$( [[ "$chr" != "$req" ]] && echo "  (effective: ${chr})" )"
@@ -430,6 +472,13 @@ import_one_chrom() {
   #  libs are harmless — GATK 4.6 targets JDK 17. Not worth extra --java-options.)
   [[ "$CONSOLIDATE" == "true" ]] && mode_opts+=(--consolidate)
 
+  if [[ "$PROFILE" == "true" ]]; then
+    prof_csv="${OUTPUT_PATH}/gendbi_profile_${chr}_${SLURM_JOB_ID:-$$}.csv"
+    profile_poller "$prof_csv" "$PROFILE_INTERVAL" &
+    PROFILE_PID=$!
+    echo "[i]  Profiling  : ${prof_csv}  (JVM RSS/swap/IO every ${PROFILE_INTERVAL}s)"
+  fi
+
   set -o xtrace
   gatk --java-options "-Xms${MEM} -Xmx${MEM}" GenomicsDBImport \
     --sample-name-map "$map" \
@@ -438,9 +487,15 @@ import_one_chrom() {
     --batch-size "$BATCH_SIZE" \
     --reader-threads "$njobs" \
     --genomicsdb-shared-posixfs-optimizations true \
-    --verbosity ERROR \
+    --verbosity "$VERBOSITY" \
     "${mode_opts[@]}"
   set +o xtrace
+
+  if [[ -n "$PROFILE_PID" ]]; then
+    kill "$PROFILE_PID" 2>/dev/null || true; wait "$PROFILE_PID" 2>/dev/null || true
+    PROFILE_PID=""
+    echo "[i]  Profile written: ${prof_csv:-} ($(wc -l < "${prof_csv:-/dev/null}" 2>/dev/null || echo 0) rows)"
+  fi
 
   [[ -s "${ws_work}/callset.json" && -s "${ws_work}/vidmap.json" ]] \
     || { echo "[X]  CANCELLED: GenomicsDBImport failed for ${chr}, workspace incomplete: ${ws_work}"; exit 1; }

@@ -245,6 +245,10 @@ choices made with the maintainer:
          samples), do not GENDBI_CONSOLIDATE=true an update.
   * wave 2 used 21h of its 24h walltime — for a larger cohort or the big
     chromosomes an update+consolidate would time out. Another reason to drop it.
+  * "update slower than a fresh build?" — NO. The IMPORT phase of wave 2 (7h25m
+    for 46 samples) is the same rate as wave 1's create (7h40m for 47). The 3x
+    is 100% the consolidation tail (13h35m). Without --consolidate, wave 2 would
+    have been ~8h ≈ wave 1.
   * MEMORY SCALES WITH CONTIG SIZE (seff total RSS, not the JVM heap):
         chr22 31 samp   6.7 GB / 32 (21%)
         chr1  47 samp  27.4 GB / 32 (86%)   create      (seff 279778)
@@ -254,6 +258,15 @@ choices made with the maintainer:
       chr1-2 64G/20h · chr3-8,X 32G/12h · chr9-22,Y,M 16G/6h ; -Xmx stays 6G ;
       new --batch knob (GENDBI_BATCH_SIZE) — 50->25 roughly halves import RAM.
     CPU eff 17.7% (create) / 13.0% (update) at 4 cores — cores useless (again).
+    The 100% is DURING consolidation (import alone was 86%). Whether more RAM
+    would help = whether it's swapping = NOT visible in seff. Added
+    GENDBI_PROFILE=true (launcher --profile): background sampler writes the JVM's
+    RSS/vmswap/threads/disk-IO every 60s to <output>/gendbi_profile_<chrom>_
+    <jobid>.csv + runs GATK at --verbosity INFO for per-batch/consolidation
+    timings. Since updates no longer consolidate, the number that matters is the
+    IMPORT peak (chr1 create = 27 GB @ 47 samp); 64G contig default covers it.
+    For a finished job: sacct -j <id> -o MaxRSS,MaxVMSize,MaxDiskRead,MaxDiskWrite
+    gives more than seff.
   * STORAGE PROJECTION: chr1 93 samples = ~30 GB (~332 MB/sample). chr1 is ~8%
     of the genome -> a full 93-sample WHOLE-GENOME GenomicsDB ~= 375-400 GB.
     JVCdev has ~27 TB free; fine, but size it into the plan for the real cohort.

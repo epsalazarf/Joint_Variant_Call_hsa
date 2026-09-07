@@ -78,6 +78,14 @@ bash test/jaguar/run_jaguar_waves.sh report logs/<tag>_run_<chrom>_<timestamp>.m
 just appends a fragment. GenotypeGVCFs reads a multi-fragment DB fine.
 Consolidation on `update` is pathologically slow (test02) — never do it.
 
+**`--profile`** (or `GENDBI_PROFILE=true`): background sampler writes the
+GenomicsDBImport JVM's RSS / swap / threads / disk-IO every 60 s to
+`<output>/gendbi_profile_<chrom>_<jobid>.csv`, and runs GATK at `--verbosity
+INFO` (per-batch + consolidation timings in the log). Use it when a run is
+slower or hungrier than expected — it turns "`seff` says 100 % memory" into an
+actual curve, and shows whether the process is swapping (if `vmswap_kb` stays
+~0, more RAM won't help). `tail -f` the CSV to watch live.
+
 ## Runs
 
 ### test01 — chr22, 3 waves of 31  (jobs 278359-61, 2026-09-01) — PASS

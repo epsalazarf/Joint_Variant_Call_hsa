@@ -23,6 +23,10 @@
 #       --hours H      --time in hours   (default: chromosome-scaled, see below)
 #       --batch N      GenomicsDBImport --batch-size (default 50; drop to 25 to
 #                      roughly halve import memory on the big chromosomes)
+#       --profile      sample the JVM's RSS/swap/threads/disk-IO every 60 s to
+#                      <output>/gendbi_profile_<chrom>_<jobid>.csv, and run GATK
+#                      at --verbosity INFO (per-batch + consolidation timings).
+#                      Use it to see where a slow run spends its time / RAM.
 #
 #   Memory scales with CHROMOSOME SIZE, not just sample count (the per-sample
 #   TileDB fragment data is ~5x bigger on chr1 than chr22). test02: chr1 create
@@ -79,7 +83,7 @@ chrom_class() {
 default_mem()   { case "$(chrom_class "$1")" in big) echo 64G ;; mid) echo 32G ;; *) echo 16G ;; esac; }
 default_hours() { case "$(chrom_class "$1")" in big) echo 20  ;; mid) echo 12  ;; *) echo 6  ;; esac; }
 
-CHROM="chr22" ; N_WAVES=3 ; TAG="jaguar" ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; DRY=false
+CHROM="chr22" ; N_WAVES=3 ; TAG="jaguar" ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; PROFILE=false ; DRY=false
 pos=()
 while (( $# )); do
   case "$1" in
@@ -91,7 +95,8 @@ while (( $# )); do
     --mem)         MEM="${2:?}"; shift 2 ;;
     --hours)       HOURS="${2:?}"; shift 2 ;;
     --batch)       BATCH="${2:?}"; shift 2 ;;
-    -h|--help)     sed -n '3,42p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
+    --profile)     PROFILE=true; shift ;;
+    -h|--help)     sed -n '3,44p' "$0" | sed 's/^#\s\{0,1\}//'; exit 0 ;;
     -*)            echo "[X]  unknown option: $1  (--help)"; exit 2 ;;
     *)             pos+=("$1"); shift ;;
   esac
@@ -157,7 +162,7 @@ echo "[i]  tag         : $TAG"
 echo "[i]  chromosome  : $CHROM     waves: $N_WAVES"
 echo "[i]  cohort_root : $COHORT_ROOT"
 echo "[i]  output_dir  : $OUTPUT_DIR"
-echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h  batch=${BATCH}  ($(chrom_class "$CHROM") chromosome)"
+echo "[i]  per wave    : ${CPUS} CPU / ${MEM} / ${HOURS}h  batch=${BATCH}  profile=${PROFILE}  ($(chrom_class "$CHROM") chromosome)"
 echo "[i]  logs        : $LOG_DIR"
 echo "[i]  manifest    : $MANIFEST"
 echo "[i]  dry-run     : $DRY"
@@ -172,7 +177,7 @@ for (( w=1; w<=N_WAVES; w++ )); do
   jobname="JVC-GDBI-${TAG}-${CHROM}-w${w}"
   logfile="$LOG_DIR/${TAG}-${CHROM}-w${w}-%j.out"
 
-  wrap="env GENDBI_READER_THREADS=${CPUS} GENDBI_BATCH_SIZE=${BATCH} GENDBI_CONSOLIDATE=${consol} \
+  wrap="env GENDBI_READER_THREADS=${CPUS} GENDBI_BATCH_SIZE=${BATCH} GENDBI_CONSOLIDATE=${consol} GENDBI_PROFILE=${PROFILE} \
 bash '$S04' '$map' '$OUTPUT_DIR' '$CHROM' '$action'"
 
   set -- --parsable --job-name="$jobname" \
