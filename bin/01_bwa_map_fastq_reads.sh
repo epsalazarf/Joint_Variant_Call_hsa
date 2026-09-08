@@ -46,6 +46,7 @@ fi
 njobs=4
 RUN_FASTQC=true
 RUN_STATS=true
+HOUSEKEEP=true   # remove intermediates (unsorted BAM, repaired FASTQs) once *.sort.bam exists
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -53,6 +54,7 @@ CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 # Detect environment
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
   env_type="remote"
+  njobs=8   # matches the SLURM reservation (--cpus-per-task=8) in the launcher
 else
   env_type="local"
   njobs=8
@@ -273,8 +275,11 @@ step1b_validate_and_repair_read_pairs() {
   module load bbtools
 
   echo "[&]  Running repair.sh..."
+  # -Xmx pinned: BBTools otherwise auto-sizes its heap to visible host RAM (not
+  # the SLURM cgroup) and pegs the job at its memory limit — see 2026-09 S01 runs
+  # that sat at exactly 16G/16G.
   set -o xtrace
-  repair.sh \
+  repair.sh -Xmx8g \
     in1="$r1" in2="$r2" \
     out1="$r1_repaired" out2="$r2_repaired" \
     outsingle="$singletons" \
@@ -450,6 +455,38 @@ step4_bam_stats() {
   echo "[!]  $step_name"
 }
 
+## Housekeeping: remove intermediates once the sorted BAM(s) exist
+housekeeping() {
+  echo
+  echo "[*]  Housekeeping: Remove intermediate files"
+  [ "$HOUSEKEEP" = true ] || { echo "[i]  Skipped (HOUSEKEEP=false)"; return 0; }
+
+  local items
+  if [ -z "$read_groups" ]; then items=(""); else items=($read_groups); fi
+
+  for rg in "${items[@]}"; do
+    local sortbam unsorted
+    if [ -z "$rg" ]; then
+      sortbam="${OUTPUT_PATH}/${SAMPLE_NAME}.sort.bam"
+      unsorted="${OUTPUT_PATH}/${SAMPLE_NAME}.bam"
+    else
+      sortbam="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.sort.bam"
+      unsorted="${OUTPUT_PATH}/${SAMPLE_NAME}_${rg}.bam"
+    fi
+    # only prune once the keeper exists and is non-empty
+    if [ -s "$sortbam" ] && [ -f "$unsorted" ]; then rm -vf "$unsorted"; fi
+  done
+
+  # repaired FASTQs + singletons (single-pair path) and the bwa input manifests
+  rm -vf \
+    "${OUTPUT_PATH}/${SAMPLE_NAME}_R1.repaired.fastq.gz" \
+    "${OUTPUT_PATH}/${SAMPLE_NAME}_R2.repaired.fastq.gz" \
+    "${OUTPUT_PATH}/${SAMPLE_NAME}_singletons.fastq.gz" \
+    "${OUTPUT_PATH}/${SAMPLE_NAME}"*_bwa_inputs.txt
+
+  echo "[!]  Housekeeping"
+}
+
 ## Finisher: check final output and report
 finisher() {
   local items all_ok=true
@@ -492,6 +529,7 @@ main() {
   step2_bwa_mapping_per_readgroup
   step3_sort_mapped_bams
   step4_bam_stats
+  housekeeping
   finisher
 }
 

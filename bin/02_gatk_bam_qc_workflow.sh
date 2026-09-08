@@ -270,7 +270,9 @@ step1_mark_duplicates_picard() {
   local dup_args=()
   [[ "$REMOVE_DUPS" == "true" ]] && dup_args=(--REMOVE_DUPLICATES)
 
-  gatk MarkDuplicates \
+  # -Xmx pinned: the `gatk` wrapper otherwise sizes the heap to visible host RAM
+  # (not the SLURM cgroup) and balloons RSS to ~30G — see 2026-09 S02 runs.
+  gatk --java-options "-Xmx16g" MarkDuplicates \
     "${input_flags[@]}" \
     "${dup_args[@]}" \
     --VERBOSITY ERROR \
@@ -348,7 +350,7 @@ step3_bqsr() {
   if [ -s "$table" ]; then
     echo "[i]   Model table exists: $table"
   else
-    gatk --java-options "-XX:ParallelGCThreads=8" BaseRecalibrator \
+    gatk --java-options "-Xmx8g -XX:ParallelGCThreads=4" BaseRecalibrator \
       --input "$infile" \
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
@@ -364,7 +366,9 @@ step3_bqsr() {
   if [ -s "$bam_out" ]; then
     echo "[i]   Recalibrated BAM exists: $bam_out"
   else
-    gatk --java-options "-XX:ParallelGCThreads=8" ApplyBQSR \
+    # compression_level=5 on the RETAINED analysis-ready BAM — the gatk default
+    # of 2 nearly doubles its on-disk size.
+    gatk --java-options "-Xmx8g -XX:ParallelGCThreads=4 -Dsamjdk.compression_level=5" ApplyBQSR \
       --input "$infile" \
       --reference "$ref_gnm" \
       --bqsr-recal-file "$table" \
@@ -384,7 +388,7 @@ step3_bqsr() {
   if [ -s "$table_recal" ]; then
     echo "[i]   Post-recalibration table exists: $table_recal"
   else
-    gatk --java-options "-XX:ParallelGCThreads=8" BaseRecalibrator \
+    gatk --java-options "-Xmx8g -XX:ParallelGCThreads=4" BaseRecalibrator \
       --input "$bam_out" \
       --reference "$ref_gnm" \
       --known-sites "$ref_vars" \
@@ -476,7 +480,7 @@ step5_metrics() {
   if [ -s "$align_metrics" ]; then
     echo "[i]   Alignment metrics exist: $align_metrics"
   else
-    gatk CollectAlignmentSummaryMetrics \
+    gatk --java-options "-Xmx4g" CollectAlignmentSummaryMetrics \
       --INPUT "$infile" \
       --REFERENCE_SEQUENCE "$ref_gnm" \
       --VERBOSITY ERROR \
@@ -490,7 +494,7 @@ step5_metrics() {
   if [ -s "$insert_metrics" ] && [ -s "$insert_hist" ]; then
     echo "[i]   Insert size metrics exist"
   else
-    gatk CollectInsertSizeMetrics \
+    gatk --java-options "-Xmx4g" CollectInsertSizeMetrics \
       --INPUT "$infile" \
       --VERBOSITY ERROR \
       --OUTPUT "${insert_metrics}.tmp" \
