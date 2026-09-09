@@ -198,7 +198,7 @@ if ! ( mkdir -p \"\$SCRATCH_JOB/tmp\" && : > \"\$SCRATCH_JOB/tmp/.w\" && rm -f \
   echo \"<ERROR> add \$(hostname -s) to sbatch_exclude in config/config.yaml, then resubmit.\" >&2
   exit 1
 fi
-trap 'rm -rf \"\$SCRATCH_JOB\"' EXIT
+trap 'rm -rf \"\$SCRATCH_JOB\"' EXIT HUP TERM
 export TMPDIR=\"\$SCRATCH_JOB/tmp\"
 module load samtools >/dev/null 2>&1 || true
 echo \"[i] Scratch: \$SCRATCH_JOB  (group \$_grp, node \$(hostname -s))\"
@@ -301,8 +301,8 @@ else
 fi
 
 # --- Step 02: BAM QC + BQSR -----------------------------------------------
-# 4 CPUs / 28G / 16h — MarkDuplicates -Xmx16g, BQSR -Xmx8g; BaseRecalibrator is
-# the single-threaded ~7h tail (why only 4 CPUs).
+# 4 CPUs / 28G / 20h — MarkDuplicates -Xmx16g, BQSR -Xmx8g; BaseRecalibrator is
+# the single-threaded tail (~7h at 8GB, ~10h at 9.5GB — hence 20h wall).
 
 if have_output "*.rmdup.mqfilt.bqsr.bam"; then
   echo "[SKIP] Step 02 — analysis-ready BAM already present in ${SAMPLE_DIR}"
@@ -310,19 +310,21 @@ else
   JOB02=$(sbatch \
     --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
     --nodes=1 --ntasks=1 --cpus-per-task=4 \
-    --mem=28G --time=16:00:00 \
+    --mem=28G --time=20:00:00 \
     "${EXCLUDE_ARG[@]}" \
     ${DEP:+--dependency="$DEP"} \
     --output="${LOG_DIR}/%x.%j.log" \
     --wrap "$WRAP_S02" \
     | awk '{print $4}')
-  echo "[>] Step 02 submitted  — Job ${JOB02}  (4 CPUs / 28G / 16h)${DEP:+  [${DEP}]}"
+  echo "[>] Step 02 submitted  — Job ${JOB02}  (4 CPUs / 28G / 20h)${DEP:+  [${DEP}]}"
   DEP="afterok:${JOB02}"
   SUBMITTED+=("$JOB02")
 fi
 
 # --- Step 03: HaplotypeCaller --------------------------------------------
-# 4 CPUs / 32G / 12h — --native-pair-hmm-threads 4, -Xms/-Xmx 20G on FENIX
+# 4 CPUs / 32G / 24h — GVCF-mode HaplotypeCaller is ~10h at 4.8GB and 14-18h at
+# 8-11GB (single sample, whole genome). A per-chromosome scatter is the real fix
+# for throughput — see docs; until then the wall has to cover the largest sample.
 
 if have_output "*.raw_variants.canon_chr.g.vcf.gz" \
    && [ -d "${SAMPLE_DIR}/chrom_gvcf" ] \
@@ -332,13 +334,13 @@ else
   JOB03=$(sbatch \
     --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
     --nodes=1 --ntasks=1 --cpus-per-task=4 \
-    --mem=32G --time=12:00:00 \
+    --mem=32G --time=24:00:00 \
     "${EXCLUDE_ARG[@]}" \
     ${DEP:+--dependency="$DEP"} \
     --output="${LOG_DIR}/%x.%j.log" \
     --wrap "$WRAP_S03" \
     | awk '{print $4}')
-  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 12h)${DEP:+  [${DEP}]}"
+  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 24h)${DEP:+  [${DEP}]}"
   SUBMITTED+=("$JOB03")
 fi
 
