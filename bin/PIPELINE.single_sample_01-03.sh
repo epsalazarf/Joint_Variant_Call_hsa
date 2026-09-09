@@ -282,7 +282,9 @@ DEP=""          # afterok dependency for the next job to submit
 SUBMITTED=()    # job ids actually submitted (for the monitor hint)
 
 # --- Step 01: BWA Alignment -------------------------------------------------
-# 8 CPUs / 20G / 14h — bwa mem -t8; repair.sh pinned -Xmx8g; sort TMPDIR→scratch
+# 8 CPUs / 20G / 48h — bwa mem -t8; repair.sh pinned -Xmx8g; sort TMPDIR→scratch.
+# Walltimes are 2x the observed worst case, rounded to a 24h grid: high cluster
+# load stretches these jobs and defq has no time cap, so headroom beats reruns.
 
 if have_output "*.sort.bam"; then
   echo "[SKIP] Step 01 — sorted BAM(s) already present in ${SAMPLE_DIR}"
@@ -290,19 +292,19 @@ else
   JOB01=$(sbatch \
     --job-name="${SAMPLE_ID}-S01-${EPOCHSECONDS}" \
     --nodes=1 --ntasks=1 --cpus-per-task=8 \
-    --mem=20G --time=14:00:00 \
+    --mem=20G --time=48:00:00 \
     "${EXCLUDE_ARG[@]}" \
     --output="${LOG_DIR}/%x.%j.log" \
     --wrap "$WRAP_S01" \
     | awk '{print $4}')
-  echo "[>] Step 01 submitted  — Job ${JOB01}  (8 CPUs / 20G / 14h)"
+  echo "[>] Step 01 submitted  — Job ${JOB01}  (8 CPUs / 20G / 48h)"
   DEP="afterok:${JOB01}"
   SUBMITTED+=("$JOB01")
 fi
 
 # --- Step 02: BAM QC + BQSR -----------------------------------------------
-# 4 CPUs / 28G / 20h — MarkDuplicates -Xmx16g, BQSR -Xmx8g; BaseRecalibrator is
-# the single-threaded tail (~7h at 8GB, ~10h at 9.5GB — hence 20h wall).
+# 4 CPUs / 28G / 48h — MarkDuplicates -Xmx16g, BQSR -Xmx8g; BaseRecalibrator is
+# the single-threaded tail (~7h at 8GB, ~12h at 9.5GB observed — 48h wall).
 
 if have_output "*.rmdup.mqfilt.bqsr.bam"; then
   echo "[SKIP] Step 02 — analysis-ready BAM already present in ${SAMPLE_DIR}"
@@ -310,21 +312,21 @@ else
   JOB02=$(sbatch \
     --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
     --nodes=1 --ntasks=1 --cpus-per-task=4 \
-    --mem=28G --time=20:00:00 \
+    --mem=28G --time=48:00:00 \
     "${EXCLUDE_ARG[@]}" \
     ${DEP:+--dependency="$DEP"} \
     --output="${LOG_DIR}/%x.%j.log" \
     --wrap "$WRAP_S02" \
     | awk '{print $4}')
-  echo "[>] Step 02 submitted  — Job ${JOB02}  (4 CPUs / 28G / 20h)${DEP:+  [${DEP}]}"
+  echo "[>] Step 02 submitted  — Job ${JOB02}  (4 CPUs / 28G / 48h)${DEP:+  [${DEP}]}"
   DEP="afterok:${JOB02}"
   SUBMITTED+=("$JOB02")
 fi
 
 # --- Step 03: HaplotypeCaller --------------------------------------------
-# 4 CPUs / 32G / 24h — GVCF-mode HaplotypeCaller is ~10h at 4.8GB and 14-18h at
-# 8-11GB (single sample, whole genome). A per-chromosome scatter is the real fix
-# for throughput — see docs; until then the wall has to cover the largest sample.
+# 4 CPUs / 32G / 48h — GVCF-mode HaplotypeCaller is ~10h at 4.8GB and 14-18h at
+# 8-11GB (single sample, whole genome), so 48h covers the largest sample even
+# under load. A per-chromosome scatter is the real throughput fix — see docs.
 
 if have_output "*.raw_variants.canon_chr.g.vcf.gz" \
    && [ -d "${SAMPLE_DIR}/chrom_gvcf" ] \
@@ -334,13 +336,13 @@ else
   JOB03=$(sbatch \
     --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
     --nodes=1 --ntasks=1 --cpus-per-task=4 \
-    --mem=32G --time=24:00:00 \
+    --mem=32G --time=48:00:00 \
     "${EXCLUDE_ARG[@]}" \
     ${DEP:+--dependency="$DEP"} \
     --output="${LOG_DIR}/%x.%j.log" \
     --wrap "$WRAP_S03" \
     | awk '{print $4}')
-  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 24h)${DEP:+  [${DEP}]}"
+  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 48h)${DEP:+  [${DEP}]}"
   SUBMITTED+=("$JOB03")
 fi
 
