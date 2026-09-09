@@ -2,12 +2,22 @@
 
 # =============================================================================
 # Title       : GATK HaplotypeCaller [FENIX]
-# Description : Per-sample GVCF generation and chromosome splitting. Adapted for LAVIS-FENIX.
+# Description : Per-sample GVCF generation. Two modes:
+#                 whole-genome  — one HaplotypeCaller call, then split by chrom
+#                 scatter       — one HaplotypeCaller call for ONE chromosome,
+#                                 written straight into chrom_gvcf/ (arg 3 set).
+#               The scatter mode is meant to be run as a 25-way SLURM array (one
+#               task per canonical chromosome) so per-sample wall time drops from
+#               ~15 h to ~2 h (the chr1 task) and a failure only costs one
+#               chromosome. Step 04 (GenomicsDBImport) consumes chrom_gvcf/
+#               either way — same filenames.
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-03-24
-# Version     : 1.1
-# Usage       : 03_gatk_haplotype_caller.sh <bqsr.bam> [output_path]
+# Version     : 1.2
+# Usage       : 03_gatk_haplotype_caller.sh <bqsr.bam> [output_path] [chrom]
+#                 chrom — optional; one of chr1..chr22 chrX chrY chrM.
+#                         When given, only that chromosome is called.
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
 # =============================================================================
 
@@ -15,8 +25,9 @@ set -euo pipefail
 
 # <ARGUMENTS> -----------------------------------------------------------------
 
-BAM_FILE="${1:?Usage: $(basename "$0") <bqsr.bam> [output_path]}"
+BAM_FILE="${1:?Usage: $(basename "$0") <bqsr.bam> [output_path] [chrom]}"
 OUTPUT_PATH="${2:-$PWD}"
+CHROM="${3:-}"          # empty = whole-genome mode; else scatter one chromosome
 
 # <\ARGS> ---------------------------------------------------------------------
 
@@ -25,7 +36,10 @@ OUTPUT_PATH="${2:-$PWD}"
 echo
 echo "[$] GATK HaplotypeCaller [FENIX] >>"
 echo "[&]  Started: $(date)"
+[ -n "$CHROM" ] && echo "[&]  Mode: scatter (${CHROM})" || echo "[&]  Mode: whole-genome"
 script_timestamp=$(date +%s)
+
+CANON_CHROMS="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
 
 echo
 echo "[i]  Checking input files..."
@@ -35,30 +49,41 @@ if [ -f "$BAM_FILE" ]; then
   echo "[i]  Output: ${OUTPUT_PATH}"
   BAM_name=$(basename "$BAM_FILE")
   BAM_prefix=${BAM_name%%.*bam}
-  FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
 else
   echo "[X]  CANCELLED. File not found: ${BAM_FILE}"
   exit 1
 fi
 
+# Guard: valid chromosome when in scatter mode
+if [ -n "$CHROM" ]; then
+  case " $CANON_CHROMS " in
+    *" $CHROM "*) : ;;
+    *) echo "[X]  CANCELLED. Not a canonical chromosome: '${CHROM}'"; exit 1 ;;
+  esac
+  FINAL_FILE="${OUTPUT_PATH}/chrom_gvcf/${BAM_prefix}.raw_vars.${CHROM}.g.vcf.gz"
+else
+  FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.raw_variants.canon_chr.g.vcf.gz"
+fi
+
 # Options
-njobs=2
+njobs=2               # bcftools threads (whole-genome mode)
 SPLIT_VAR_TYPE=true
 HOUSEKEEP=false
 
-# Config file (relative to repo root)
-CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
-
-# Detect environment
+# Detect environment + size the HaplotypeCaller job by mode
 if [[ -n "${SSH_CLIENT:-}${SSH_TTY:-}${SSH_CONNECTION:-}" ]]; then
   env_type="remote"
-  MEM="20G"
+  [ -n "$CHROM" ] && MEM="10G" || MEM="20G"
 else
   env_type="local"
-  MEM="12G"
+  [ -n "$CHROM" ] && MEM="8G" || MEM="12G"
 fi
+[ -n "$CHROM" ] && HC_THREADS=2 || HC_THREADS=4
 
-echo "[i]  Environment: $env_type"
+echo "[i]  Environment: $env_type   (HC heap ${MEM}, pair-HMM threads ${HC_THREADS})"
+
+# Config file (relative to repo root)
+CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
 
 # Parse YAML config into Bash variables
 eval "$(
@@ -87,7 +112,7 @@ fi
 
 # Guard: reference file paths
 if [ -z "$ref_gnm" ] || [ -z "$ref_vars" ]; then
-  echo "[X]  Missing required reference paths. Check config: $CONFIG_FILE"
+  echo "[X]  Missing required reference paths. Check config."
   exit 1
 fi
 
@@ -102,7 +127,53 @@ echo "[i]    Variants: ${ref_vars}"
 
 # <FUNCTIONS> -----------------------------------------------------------------
 
-## Step 1: HaplotypeCaller (GVCF mode)
+## Scatter: HaplotypeCaller for ONE chromosome, straight into chrom_gvcf/
+step_scatter_haplotype_caller() {
+  local step_name="HaplotypeCaller (scatter: ${CHROM})"
+  local infile="$BAM_FILE"
+  local outdir="${OUTPUT_PATH}/chrom_gvcf"
+  local outfile="${outdir}/${BAM_prefix}.raw_vars.${CHROM}.g.vcf.gz"
+  local tmp="${outdir}/.${BAM_prefix}.raw_vars.${CHROM}.tmp.g.vcf.gz"
+  local step_timestamp=$(date +%s)
+
+  echo
+  echo "[*]  $step_name"
+  echo "[&]  $(date +%Y%m%d-%H%M)"
+
+  [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
+  if [ -s "$outfile" ] && [ -s "${outfile}.tbi" ]; then
+    echo "[i]  Already completed ($outfile exists)"; return 0
+  fi
+
+  mkdir -p "$outdir"
+  rm -f "$tmp" "${tmp}.tbi"
+
+  # Mitochondrion is haploid.
+  local ploidy_arg=()
+  [ "$CHROM" = "chrM" ] && ploidy_arg=(--sample-ploidy 1)
+
+  gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
+    --input "$infile" \
+    --reference "$ref_gnm" \
+    --dbsnp "$ref_vars" \
+    --intervals "$CHROM" \
+    --emit-ref-confidence GVCF \
+    --verbosity ERROR \
+    --native-pair-hmm-threads "$HC_THREADS" \
+    --create-output-variant-index \
+    ${ploidy_arg[@]+"${ploidy_arg[@]}"} \
+    --output "$tmp"
+
+  [ -s "$tmp" ] || { echo "[X]  CANCELLED: $step_name produced no output"; exit 1; }
+  mv "$tmp" "$outfile"
+  mv "${tmp}.tbi" "${outfile}.tbi"
+
+  echo "[>]  $outfile"
+  echo "[!]  $step_name"
+  echo "[&]  Step time: $(echo $(( EPOCHSECONDS - step_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
+}
+
+## Step 1: HaplotypeCaller (GVCF mode, whole genome)
 step1_run_haplotype_caller() {
   local step_name="Step 1: HaplotypeCaller"
   local infile="$BAM_FILE"
@@ -122,7 +193,7 @@ step1_run_haplotype_caller() {
     --dbsnp "$ref_vars" \
     --emit-ref-confidence GVCF \
     --verbosity ERROR \
-    --native-pair-hmm-threads 4 \
+    --native-pair-hmm-threads "$HC_THREADS" \
     --create-output-variant-index \
     --output "${outfile}"
 
@@ -168,7 +239,7 @@ step3_extract_canon_chroms() {
 
   set -o xtrace
   bcftools view "$infile" \
-    --regions "chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY,chrM" \
+    --regions "$(echo "$CANON_CHROMS" | tr ' ' ',')" \
     --threads "$njobs" \
     --write-index=tbi \
     --output-type b \
@@ -280,12 +351,15 @@ finisher() {
 # <MAIN> ----------------------------------------------------------------------
 
 main() {
-  #step0_map_reads_per_sample
-  step1_run_haplotype_caller
-  step2_index_raw_gvcf
-  step3_extract_canon_chroms
-  step4_split_chroms_gvcf
-  #housekeeping
+  if [ -n "$CHROM" ]; then
+    step_scatter_haplotype_caller
+  else
+    step1_run_haplotype_caller
+    step2_index_raw_gvcf
+    step3_extract_canon_chroms
+    step4_split_chroms_gvcf
+    #housekeeping
+  fi
   finisher
 }
 

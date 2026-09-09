@@ -207,28 +207,45 @@ Runs GATK HaplotypeCaller in GVCF mode. Use for samples with normal WGS depth (�
 ### Single sample
 
 ```bash
+# whole genome (one long call, then split by chromosome)
 bash bin/03_gatk_haplotype_caller.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
+
+# one chromosome only — writes straight into chrom_gvcf/ (used by the scatter)
+bash bin/03_gatk_haplotype_caller.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path] chr7
 ```
 
-### Batch (SLURM)
+### Recommended: per-chromosome scatter via the launcher
+
+`bin/PIPELINE.single_sample_01-03.sh` (`SCATTER_S03=true`, default) submits Step 03
+as a **25-way SLURM array** — one `HaplotypeCaller -L <chrom>` task per canonical
+chromosome (2 CPU / 13 GB each, `%ARRAY_CONC` concurrent), followed by a small
+gather job that concatenates them into the whole-genome `canon_chr` GVCF.
+
+Per-sample wall time drops from ~15 h to ~2 h (the chr1 task), and a failure
+costs one chromosome, not the sample. `chrom_gvcf/` — the Step 04 input — is
+identical either way. Resubmitting re-runs only the chromosomes whose GVCF is
+missing. Set `SCATTER_S03=false` for the legacy single whole-genome job.
+
+### Batch (SLURM, legacy)
 
 ```bash
 bash bin/supp/HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
 ```
 
-Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and submits one job per sample (4 CPUs / 32 GB).
+Auto-discovers `*.rmdup.mqfilt.bqsr.bam` files and submits one whole-genome job
+per sample (4 CPUs / 32 GB). No scatter, no verified copy-back.
 
 ```bash
-squeue -u $USER | grep HAPCALL
+squeue -u $USER | grep -E 'S03|HAPCALL'
 ```
 
 ### Output
 
 | File | Description |
 |------|-------------|
-| `*.raw_variants.g.vcf.gz` | Full raw GVCF |
-| `*.raw_variants.canon_chr.g.vcf.gz` | Canonical chromosomes only |
-| `chrom_gvcf/*.raw_vars.{CHR}.g.vcf.gz` | Per-chromosome GVCFs (input for Step 04) |
+| `chrom_gvcf/*.raw_vars.{CHR}.g.vcf.gz` | Per-chromosome GVCFs (**input for Step 04**) |
+| `*.raw_variants.canon_chr.g.vcf.gz` | Canonical-chromosome roll-up (archival / QC) |
+| `*.raw_variants.g.vcf.gz` | Full all-contigs GVCF — whole-genome mode only |
 
 ---
 

@@ -29,7 +29,19 @@ set -euo pipefail
 # Set USE_SCRATCH=true on FENIX (recommended). Set false only for testing or
 # when the scratch filesystem is unavailable.
 USE_SCRATCH=true
+
+# SCATTER_S03=true : run Step 03 as a 25-way SLURM array (one HaplotypeCaller
+#   task per canonical chromosome) writing straight into chrom_gvcf/, then a
+#   gather job builds the whole-genome canon_chr GVCF. Per-sample wall time
+#   ~2 h (chr1) instead of ~15 h, and a failure costs one chromosome, not the
+#   sample. Set false for the legacy single whole-genome HaplotypeCaller job.
+SCATTER_S03=true
+ARRAY_CONC=6          # max chromosome tasks running at once per sample
 # <\TOGGLES> ------------------------------------------------------------------
+
+# Canonical chromosomes, in reference (.dict) order — array index N = Nth entry.
+CANON_CHROMS="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
+CANON_N=25
 
 # <ARGUMENTS> -----------------------------------------------------------------
 
@@ -166,6 +178,17 @@ _bqsr=\$(find '${SAMPLE_DIR}' -maxdepth 1 -name '*.rmdup.mqfilt.bqsr.bam' | head
 [[ -z \"\$_bqsr\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
 SCRIPT_ARGS=(\"\$_bqsr\" \"\$SCRATCH_JOB\")"
       ;;
+    bqsr_bam_scatter)
+      # one array task = one canonical chromosome (index = SLURM_ARRAY_TASK_ID)
+      stage_inputs="
+_bqsr=\$(find '${SAMPLE_DIR}' -maxdepth 1 -name '*.rmdup.mqfilt.bqsr.bam' | head -1)
+[[ -z \"\$_bqsr\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
+_canon=(${CANON_CHROMS})
+_chrom=\"\${_canon[\$((SLURM_ARRAY_TASK_ID - 1))]:-}\"
+[[ -z \"\$_chrom\" ]] && { echo \"<ERROR> no chromosome for array index \$SLURM_ARRAY_TASK_ID\" >&2; exit 1; }
+echo \"[i] array task \$SLURM_ARRAY_TASK_ID -> \$_chrom\"
+SCRIPT_ARGS=(\"\$_bqsr\" \"\$SCRATCH_JOB\" \"\$_chrom\")"
+      ;;
   esac
 
   # -- verified copy-back: one _cb call per matched file --
@@ -178,7 +201,7 @@ for _f in \"\$SCRATCH_JOB\"/${glob}; do [ -e \"\$_f\" ] && _cb \"\$_f\" '${SAMPL
     copy_back+="
 for _d in \"\$SCRATCH_JOB\"/*-fastqc; do [ -d \"\$_d\" ] && { cp -r \"\$_d\" '${SAMPLE_DIR}/' || { echo '<ERROR> cp fastqc failed' >&2; _cb_fail=1; }; }; done"
   fi
-  if [[ "$input_mode" == "bqsr_bam" ]]; then
+  if [[ "$input_mode" == "bqsr_bam" || "$input_mode" == "bqsr_bam_scatter" ]]; then
     copy_back+="
 if [ -d \"\$SCRATCH_JOB/chrom_gvcf\" ]; then
   mkdir -p '${SAMPLE_DIR}/chrom_gvcf'
@@ -240,11 +263,12 @@ if [[ "$USE_SCRATCH" == true ]]; then
     "*.rmdup.mqfilt.bqsr.bam *.rmdup.mqfilt.bqsr.bam.bai \
      *.bqsr_table.txt *-dups.txt *.mosdepth.* *.metrics.txt *.pdf")"
 
-  # S03: keep only the canonical-chromosome GVCF + the per-chrom split
-  # (chrom_gvcf/ is the Step 04 input). The all-contigs raw_variants.g.vcf.gz is
-  # redundant and NOT copied back.
+  # S03 whole-genome: keep only the canon_chr GVCF + per-chrom split
+  # (chrom_gvcf/ is the Step 04 input). all-contigs raw_variants.g.vcf.gz is NOT
+  # copied back. S03 scatter: each array task writes one chrom_gvcf/ entry.
   WRAP_S03="$(build_scratch_wrap "$S03" "bqsr_bam" \
     "*.raw_variants.canon_chr.g.vcf.gz *.raw_variants.canon_chr.g.vcf.gz.tbi")"
+  WRAP_S03_SCATTER="$(build_scratch_wrap "$S03" "bqsr_bam_scatter" "")"
 
 else
 
@@ -263,7 +287,39 @@ else
     [[ -z \"\$bqsr_bam\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
     bash '${S03}' \"\$bqsr_bam\" '${SAMPLE_DIR}'"
 
+  WRAP_S03_SCATTER="
+    set -euo pipefail
+    bqsr_bam=\$(find '${SAMPLE_DIR}' -maxdepth 1 -name '*.rmdup.mqfilt.bqsr.bam' | head -1)
+    [[ -z \"\$bqsr_bam\" ]] && { echo '<ERROR> No *.rmdup.mqfilt.bqsr.bam in ${SAMPLE_DIR}'; exit 1; }
+    _canon=(${CANON_CHROMS})
+    _chrom=\"\${_canon[\$((SLURM_ARRAY_TASK_ID - 1))]:-}\"
+    [[ -z \"\$_chrom\" ]] && { echo \"<ERROR> no chromosome for array index \$SLURM_ARRAY_TASK_ID\" >&2; exit 1; }
+    bash '${S03}' \"\$bqsr_bam\" '${SAMPLE_DIR}' \"\$_chrom\""
+
 fi
+
+# S03 gather (scatter mode only): concat the 25 per-chrom GVCFs → canon_chr GVCF.
+# Small + fast; writes straight to SAMPLE_DIR via a .tmp rename, no scratch.
+WRAP_S03_GATHER="
+set -euo pipefail
+command -v bcftools >/dev/null || module load bcftools >/dev/null 2>&1 || true
+cd '${SAMPLE_DIR}'
+_canon=(${CANON_CHROMS})
+_files=()
+for _c in \"\${_canon[@]}\"; do
+  _f=\$(find chrom_gvcf -maxdepth 1 -name \"*.raw_vars.\${_c}.g.vcf.gz\" 2>/dev/null | head -1)
+  [[ -z \"\$_f\" ]] && { echo \"<ERROR> gather: missing chrom_gvcf for \$_c\" >&2; exit 1; }
+  _files+=(\"\$_f\")
+done
+_pref=\$(basename \"\${_files[0]}\"); _pref=\${_pref%%.raw_vars.*}
+_out=\"\${_pref}.raw_variants.canon_chr.g.vcf.gz\"
+echo \"[i] gather \${#_files[@]} chromosomes -> \$_out\"
+bcftools concat --output-type z --output \"\${_out}.tmp\" \"\${_files[@]}\"
+bcftools index --tbi --force \"\${_out}.tmp\"
+mv \"\${_out}.tmp\" \"\$_out\"
+mv \"\${_out}.tmp.tbi\" \"\${_out}.tbi\"
+echo \"[i] gather done: \$_out\"
+"
 
 # Resumability: under scratch each step starts in a fresh empty dir, so the
 # steps' own skip logic never sees prior outputs in SAMPLE_DIR. We decide HERE
@@ -277,6 +333,22 @@ fi
 # on the most recent job actually submitted (if any).
 
 have_output() { find "$SAMPLE_DIR" -maxdepth 1 -name "$1" | grep -q .; }
+
+# One chrom_gvcf/ entry present and non-empty (with its .tbi)?
+have_chrom_gvcf() {
+  local f
+  f=$(find "$SAMPLE_DIR/chrom_gvcf" -maxdepth 1 -name "*.raw_vars.$1.g.vcf.gz" 2>/dev/null | head -1)
+  [ -n "$f" ] && [ -s "$f" ] && [ -s "${f}.tbi" ]
+}
+# Comma list of 1-based array indices whose chromosome GVCF is missing ("" = none)
+chrom_missing_indices() {
+  local i=0 c out=""
+  for c in $CANON_CHROMS; do
+    i=$((i + 1))
+    have_chrom_gvcf "$c" || out="${out:+$out,}$i"
+  done
+  printf '%s' "$out"
+}
 
 DEP=""          # afterok dependency for the next job to submit
 SUBMITTED=()    # job ids actually submitted (for the monitor hint)
@@ -324,26 +396,72 @@ else
 fi
 
 # --- Step 03: HaplotypeCaller --------------------------------------------
-# 4 CPUs / 32G / 48h — GVCF-mode HaplotypeCaller is ~10h at 4.8GB and 14-18h at
-# 8-11GB (single sample, whole genome), so 48h covers the largest sample even
-# under load. A per-chromosome scatter is the real throughput fix — see docs.
+# SCATTER_S03=true  : 25-way array (one chrom each), 2 CPU / 13G / 48h per task,
+#                     %${ARRAY_CONC} concurrent; then a gather job for canon_chr.
+# SCATTER_S03=false : one whole-genome job, 4 CPU / 32G / 48h.
+# Either way "done" = all 25 chrom_gvcf/ entries present; canon_chr GVCF is the
+# archival roll-up.
 
-if have_output "*.raw_variants.canon_chr.g.vcf.gz" \
-   && [ -d "${SAMPLE_DIR}/chrom_gvcf" ] \
-   && [ -n "$(ls -A "${SAMPLE_DIR}/chrom_gvcf" 2>/dev/null)" ]; then
-  echo "[SKIP] Step 03 — final GVCF + chrom_gvcf/ already present in ${SAMPLE_DIR}"
+canon_present=false
+have_output "*.raw_variants.canon_chr.g.vcf.gz" && canon_present=true
+
+if [[ "$SCATTER_S03" == true ]]; then
+
+  miss="$(chrom_missing_indices)"
+
+  if [[ -z "$miss" && "$canon_present" == true ]]; then
+    echo "[SKIP] Step 03 — 25/25 chrom GVCFs + canon roll-up already present"
+  else
+    ARR_DEP=""
+    if [[ -n "$miss" ]]; then
+      nmiss=$(awk -F, '{print NF}' <<< "$miss")
+      [[ "$nmiss" -eq "$CANON_N" ]] && miss="1-${CANON_N}"   # tidy the all-missing case
+      JOB03=$(sbatch \
+        --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
+        --array="${miss}%${ARRAY_CONC}" \
+        --nodes=1 --ntasks=1 --cpus-per-task=2 \
+        --mem=13G --time=48:00:00 \
+        "${EXCLUDE_ARG[@]}" \
+        ${DEP:+--dependency="$DEP"} \
+        --output="${LOG_DIR}/%x.%A_%a.log" \
+        --wrap "$WRAP_S03_SCATTER" \
+        | awk '{print $4}')
+      echo "[>] Step 03 array submitted — Job ${JOB03}  (${nmiss} chrom(s): ${miss}; 2 CPU / 13G / 48h; %${ARRAY_CONC})${DEP:+  [${DEP}]}"
+      ARR_DEP="afterok:${JOB03}"
+      SUBMITTED+=("$JOB03")
+    fi
+    gdep="${ARR_DEP:-$DEP}"
+    JOB03G=$(sbatch \
+      --job-name="${SAMPLE_ID}-S03g-${EPOCHSECONDS}" \
+      --nodes=1 --ntasks=1 --cpus-per-task=2 \
+      --mem=8G --time=24:00:00 \
+      "${EXCLUDE_ARG[@]}" \
+      ${gdep:+--dependency="$gdep"} \
+      --output="${LOG_DIR}/%x.%j.log" \
+      --wrap "$WRAP_S03_GATHER" \
+      | awk '{print $4}')
+    echo "[>] Step 03 gather submitted — Job ${JOB03G}${gdep:+  [${gdep}]}"
+    SUBMITTED+=("$JOB03G")
+  fi
+
 else
-  JOB03=$(sbatch \
-    --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
-    --nodes=1 --ntasks=1 --cpus-per-task=4 \
-    --mem=32G --time=48:00:00 \
-    "${EXCLUDE_ARG[@]}" \
-    ${DEP:+--dependency="$DEP"} \
-    --output="${LOG_DIR}/%x.%j.log" \
-    --wrap "$WRAP_S03" \
-    | awk '{print $4}')
-  echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 48h)${DEP:+  [${DEP}]}"
-  SUBMITTED+=("$JOB03")
+
+  if [[ -z "$(chrom_missing_indices)" && "$canon_present" == true ]]; then
+    echo "[SKIP] Step 03 — final GVCF + chrom_gvcf/ already present in ${SAMPLE_DIR}"
+  else
+    JOB03=$(sbatch \
+      --job-name="${SAMPLE_ID}-S03-${EPOCHSECONDS}" \
+      --nodes=1 --ntasks=1 --cpus-per-task=4 \
+      --mem=32G --time=48:00:00 \
+      "${EXCLUDE_ARG[@]}" \
+      ${DEP:+--dependency="$DEP"} \
+      --output="${LOG_DIR}/%x.%j.log" \
+      --wrap "$WRAP_S03" \
+      | awk '{print $4}')
+    echo "[>] Step 03 submitted  — Job ${JOB03}  (4 CPUs / 32G / 48h)${DEP:+  [${DEP}]}"
+    SUBMITTED+=("$JOB03")
+  fi
+
 fi
 
 # <\MAIN> ---------------------------------------------------------------------
