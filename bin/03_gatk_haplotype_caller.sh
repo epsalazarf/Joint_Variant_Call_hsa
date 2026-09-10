@@ -80,7 +80,12 @@ else
 fi
 [ -n "$CHROM" ] && HC_THREADS=2 || HC_THREADS=4
 
-echo "[i]  Environment: $env_type   (HC heap ${MEM}, pair-HMM threads ${HC_THREADS})"
+# Initial heap: for the whole-genome job match -Xmx (it grows into it anyway);
+# for a scatter shard keep it small so a chrY/chrM task doesn't reserve 10G it
+# never touches and is easier for SLURM to place on a busy node.
+[ -n "$CHROM" ] && HC_XMS="2G" || HC_XMS="$MEM"
+
+echo "[i]  Environment: $env_type   (HC heap ${HC_XMS}-${MEM}, pair-HMM threads ${HC_THREADS})"
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -103,7 +108,7 @@ eval "$(
 # Load modules on remote (work-around due to faulty parser [ARC02])
 if [[ "$env_type" == "remote" ]]; then
   echo "[i]  Loading modules..."
-  module unload oracle-java
+  module unload oracle-java 2>/dev/null || true   # quiet when not already loaded
   module load oracle-java/25.0.2
   module load gatk
   module load samtools
@@ -152,7 +157,7 @@ step_scatter_haplotype_caller() {
   local ploidy_arg=()
   [ "$CHROM" = "chrM" ] && ploidy_arg=(--sample-ploidy 1)
 
-  gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
+  gatk --java-options "-Xms$HC_XMS -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
     --input "$infile" \
     --reference "$ref_gnm" \
     --dbsnp "$ref_vars" \
@@ -187,7 +192,7 @@ step1_run_haplotype_caller() {
   [ -f "$infile" ] || { echo "[X]  Missing input: $infile"; exit 1; }
   [ -s "$outfile" ] && { echo "[i]  Already completed ($outfile exists)"; return 0; }
 
-  gatk --java-options "-Xms$MEM -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
+  gatk --java-options "-Xms$HC_XMS -Xmx$MEM -XX:ParallelGCThreads=2" HaplotypeCaller \
     --input "$infile" \
     --reference "$ref_gnm" \
     --dbsnp "$ref_vars" \

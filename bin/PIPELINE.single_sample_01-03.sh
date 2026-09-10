@@ -223,6 +223,11 @@ if ! ( mkdir -p \"\$SCRATCH_JOB/tmp\" && : > \"\$SCRATCH_JOB/tmp/.w\" && rm -f \
 fi
 trap 'rm -rf \"\$SCRATCH_JOB\"' EXIT HUP TERM
 export TMPDIR=\"\$SCRATCH_JOB/tmp\"
+# Keep crash artefacts on scratch (auto-wiped), not in the repo / CWD: a JVM
+# SIGSEGV on a bad node otherwise drops core.<pid> + hs_err_pid<pid>.log next to
+# the launcher (2026-09: node15 crashed 7 L066 shards, littered the repo root).
+ulimit -c 0 2>/dev/null || true
+cd \"\$SCRATCH_JOB\"
 module load samtools >/dev/null 2>&1 || true
 echo \"[i] Scratch: \$SCRATCH_JOB  (group \$_grp, node \$(hostname -s))\"
 ${stage_inputs}
@@ -299,7 +304,12 @@ else
 fi
 
 # S03 gather (scatter mode only): concat the 25 per-chrom GVCFs → canon_chr GVCF.
-# Small + fast; writes straight to SAMPLE_DIR via a .tmp rename, no scratch.
+# The pipeline does NOT consume this file — Step 04 (GenomicsDBImport) reads
+# chrom_gvcf/ directly. It is produced purely for ARCHIVAL: one whole-genome
+# GVCF per sample on the backup volume is far easier to handle than 25 shards.
+# ~13 min with a full bcftools concat (recompress) — deliberately not --naive;
+# the cost is trivial next to the ~3 h scatter and a clean single-stream file is
+# worth more for long-term storage. Writes straight to SAMPLE_DIR via .tmp rename.
 WRAP_S03_GATHER="
 set -euo pipefail
 command -v bcftools >/dev/null || module load bcftools >/dev/null 2>&1 || true

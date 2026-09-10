@@ -123,7 +123,7 @@ eval "$(
 # Load modules on remote (work-around due to faulty parser [ARC02])
 if [[ "$env_type" == "remote" ]]; then
   echo "[@]  Loading modules..."
-  module unload oracle-java
+  module unload oracle-java 2>/dev/null || true   # quiet when not already loaded
   module load oracle-java/25.0.2
   module load gatk
   module load samtools
