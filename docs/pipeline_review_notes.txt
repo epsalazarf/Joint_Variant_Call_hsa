@@ -1,7 +1,8 @@
 ===============================================================================
  PIPELINE REVIEW NOTES  —  Joint Variant Calling Pipeline [FENIX]
  Kept for future guidance. Not auto-generated; update by hand as items are
- resolved. Last touched: 2026-08-31 (during S04 GenomicsDBImport implementation)
+ resolved. Last touched: 2026-09-10 (S03 scatter validated on SLEmx Batch16;
+ S04 known-limitations pass: update-safety gap + GenomicsDB vs TileDB-VCF)
 ===============================================================================
 
 Guiding philosophy (per maintainer, 2026-08-31):
@@ -67,6 +68,31 @@ Guiding philosophy (per maintainer, 2026-08-31):
     SLURM --output file (or the PIPELINE launcher's log/ dir). Either add a
     `tee`-based logger to the golden template, or fix the docs.
 
+[S04 / incremental update] No explicit workspace backup before an `update`.
+    GATK's own tracker (broadinstitute/gatk#6558) reports GenomicsDB workspace
+    CORRUPTION when an incremental `--genomicsdb-update-workspace-path` run fails
+    partway, and recommends backing the workspace up first. We have NOT verified
+    this against GATK 4.6.2.0 and there is no snapshot/verify/swap guard in S04.
+    Current partial mitigation (by luck of the design, not intent):
+      - S04's `update` path copies the live workspace to /scratch and imports
+        into the copy, so the on-/mnt/data original is untouched until copy-back.
+      - copy-back is an atomic `mv` of a fully-staged `.<chr>.new.$$` dir over the
+        old workspace — a crash DURING the mv is the only true danger window, and
+        the old dir is gone at that point with no backup.
+      - test01 (3 update waves, chr22) and test02 (1 update wave, chr1) both ran
+        this way with no corruption. Small n, all on the JAGUAR test workspace.
+    DEFERRED, but this is a PRE-CONDITION for the first PRODUCTION incremental:
+    before the SLE update wave (JAGUAR's first full run is a single `create`, so
+    it is not affected), add to S04's update path:
+      1. snapshot the live workspace to <output>/<chrom>.bak.<ts> (or assert the
+         scratch stage-in copy is complete + byte-count matches) BEFORE the gatk
+         call;
+      2. verify the new workspace after copy-back (SelectVariants smoke query /
+         sample count) BEFORE removing the backup;
+      3. on any failure, keep the backup and print the restore command.
+    Track alongside the pipeline-wide checker (section 5) — the checker should
+    also warn when `update` is requested and no recent backup exists.
+
 
 -------------------------------------------------------------------------------
  2. THINGS TO IMPROVE IN OLDER SCRIPTS (deferred — after 04/05/06 land)
@@ -115,7 +141,15 @@ Guiding philosophy (per maintainer, 2026-08-31):
 
 [resourcing] Keep per-job requests modest so jobs schedule fast:
     * S02  ~8 CPU / 32G   (MarkDuplicatesSpark heap + GC threads)
-    * S03  ~4 CPU / 32G   (--native-pair-hmm-threads 4, -Xmx20G)
+    * S03  SCATTER (default): 25-way SLURM array, one chromosome per task,
+                            2 CPU / 13G / 48h, %6 concurrent, then a ~13-min
+                            gather. Per-sample WALL ~3 h (was ~12 h whole-genome
+                            — which was timing out against the old 12 h cap).
+                            -Xms2G -Xmx10G per shard (chrY/chrM don't need 10G
+                            committed). See section 4 "S03 SCATTER" for the
+                            Batch16 measurements.
+      S03 whole-genome (legacy, SCATTER_S03=false): ~4 CPU / 32G,
+                            --native-pair-hmm-threads 4, -Xmx20G, ~12 h.
     * S04  2 CPU always (10-18% CPU eff at any core count — serial + I/O-bound).
                             RAM + wall-time SCALE WITH CONTIG SIZE (native TileDB
                             fragment data, not heap): chr22 6.7 GB/72 min,
@@ -133,6 +167,53 @@ Guiding philosophy (per maintainer, 2026-08-31):
     * S06  (est.) ~2 CPU / 24-32G, VQSR model building is memory-ish
     Scatter by chromosome and submit per-chrom jobs rather than one fat job.
 
+
+[S03 SCATTER]  validated on SLEmx Batch16 (8 samples), 2026-09-09/10.
+    PIPELINE.single_sample_01-03.sh SCATTER_S03=true: S03 runs as a 25-way
+    SLURM array (index N -> Nth canonical chromosome, .dict order), each task
+    calling HaplotypeCaller -L <chrom> straight into chrom_gvcf/. A gather job
+    (bcftools concat) then rolls the 25 shards into the whole-genome
+    raw_variants.canon_chr.g.vcf.gz. ARRAY_CONC=6 tasks concurrent per sample.
+
+    MEASURED (Batch16 vs JAGUAR's old whole-genome S03, same GATK 4.6.2.0):
+      * old whole-genome S03: HaplotypeCaller median 699 min (range 403-956),
+        total step median 713 min. One serial job -> ~12 h wall. It was
+        CANCELLED-AT-TIME-LIMIT-prone: the pre-48h launcher gave S03 a 12 h cap
+        and median compute was 11.6 h (HL047 job 286851 died exactly at 12:00:00).
+      * scatter: per-chromosome compute chr1/chr2 ~62-81 min, mid chrs 20-55 min,
+        chrY ~2-5 min, chrM ~30 s. Sum of 25 shards 12.7-14.7 h == same total
+        compute (expected). Per-sample ARRAY WALL 2.6-3.6 h at %6. Gather
+        10-13 min. Net: ~12 h -> ~3 h wall, ~4x.
+      * FAULT ISOLATION proven: L066's 7 late-wave shards (chr19-22,X,Y,M) all
+        hit JVM SIGSEGV at ~0.3 s (startup, in JIT'd java.util.HashMap.putVal —
+        not GATK, not data) because they landed on node15 (bad RAM: different
+        crash PC each time). Cost = re-run 7 chromosomes (~75 min), NOT the
+        whole 12 h sample. The launcher's chrom_missing_indices() resubmits
+        exactly the missing indices + gather. node15 -> sbatch_exclude.
+
+    FIXES applied 2026-09-10 (this review):
+      * core dumps / hs_err: the scatter wrap didn't cd off the submission dir,
+        so node15's crashes dropped core.<pid> + hs_err_pid<pid>.log into the
+        repo root. build_scratch_wrap now does `ulimit -c 0` + `cd $SCRATCH_JOB`
+        in the prologue (all modes) -> crash artefacts land on auto-wiped
+        scratch. fastq mode still cd's to SAMPLE_DIR afterwards for S01.
+      * -Xms: S03 scatter was `-Xms10G -Xmx10G` for every shard incl chrY/chrM.
+        Now HC_XMS=2G for scatter (=MEM for whole-genome), -Xmx unchanged.
+      * `module unload oracle-java` in S02/S03 -> `2>/dev/null || true` (it
+        printed a "cannot be unloaded" notice on every one of the 25 tasks).
+
+    canon_chr roll-up: DELIBERATELY KEPT. Step 04 reads chrom_gvcf/ directly and
+    does NOT need it; it exists purely for ARCHIVAL on the backup volume (one
+    whole-genome GVCF/sample beats 25 shards to store and move). ~13 min full
+    bcftools concat (not --naive) — cost is trivial vs the 3 h scatter and a
+    single clean recompressed stream is better for long-term storage. If the
+    backup policy ever changes, `GATHER_CANON` could gate it.
+
+    Batch16 status: HL047 HL050 HL078 L007 L061 L065 complete (25/25 + roll-up);
+    L044 completed via LEGACY whole-genome (submitted before the switch, 10.1 h);
+    L066 18/25 — chr19-22,X,Y,M pending a node15-excluded resubmit (skipped for
+    now per maintainer).
+
 [slurm accounting] seff 276894 shows User/Group esalazarf/fsanchezq. This is
     EXPECTED: the maintainer's primary group is fsanchezq (paleogenomics); he is
     a guest in amedina (the lab this pipeline is being built for — Lupus cohort).
@@ -145,6 +226,9 @@ Guiding philosophy (per maintainer, 2026-08-31):
 [java] FENIX needs an explicit `module unload oracle-java` then
     `module load oracle-java/25.0.2` before `module load gatk` (see S03).
     S04 does the same (guarded so it is harmless if already unloaded).
+    2026-09-10: S02/S03 `module unload oracle-java` now `2>/dev/null || true` —
+    when nothing is loaded module prints a "cannot be unloaded" notice, x25 in
+    the S03 scatter array. Harmless, just noise; now silenced.
 
 [bash] FENIX bash is 5.x; scripts freely use `EPOCHSECONDS`. macOS ships bash
     3.2, so local `bash script.sh` runs of 02/03/04 will trip on `set -u` +
@@ -178,6 +262,16 @@ choices made with the maintainer:
   6. Engine           : committed to GenomicsDB (not CombineGVCFs) — cohorts
                        only grow, and the incremental-update feature is the
                        reason.
+
+  ENGINE CAVEAT — GenomicsDB is NOT TileDB-VCF. GATK's GenomicsDBImport is built
+  on GenomicsDB (an embedded, older TileDB core maintained by the Broad), not the
+  standalone TileDB-VCF library (TileDB Inc.). They share the sparse-array idea
+  and a TileDB lineage but are different codebases with different teams. Do NOT
+  assume a TileDB-VCF feature (native S3/object-store I/O, lossless BCF
+  round-trip, documented incremental-ingest semantics) applies to what
+  GenomicsDBImport does — verify against GATK's own docs/behaviour. GenomicsDB
+  was chosen for "done first": officially supported GATK step, unblocks S05/S06
+  immediately, no new tooling. Revisit once S05/S06 are stable (section 5).
 
   NOT yet built (deferred until S04 is proven on FENIX with real data):
     * a GENDBI.seq_batch-slurmer.sh wrapper to scatter the per-chrom jobs
@@ -380,5 +474,33 @@ choices made with the maintainer:
         above). Discover by structure (a known marker filename/dir like
         chrom_gvcf/, globbed) and confirm identity from file CONTENT (GVCF/BAM
         header) wherever possible, never by parsing the path.
+
+
+[TASK: evaluate TileDB-VCF as a Script 04 replacement]  (backlog — important,
+    NOT urgent; do NOT block S05/S06 on this)
+
+    Rationale: true incremental sample ingest (vs GATK's update path that its own
+    tracker says needs a backup — see section 1), native object-storage support,
+    and a documented lossless VCF/BCF export path.
+
+    FIRST STEP before any design work: confirm TileDB-VCF is available on FENIX
+    (`module avail`, package repo). If it is not installed, this becomes a
+    module-request to cluster admin — that has its own lead time and may itself
+    justify staying on GenomicsDB for now.
+
+    Counterargument to weigh before committing:
+      * The scaling case for TileDB-VCF (Intel/Broad benchmarks: near-linear to
+        ~40K samples, ~2 s to add a sample) is built around cohorts far larger
+        than ours (SLEmx ~127, JAGUAR 93). At this scale GenomicsDB's "N+1" cost
+        may already be small in absolute terms.
+      * Switching ingestion tooling mid-pipeline is a real cost: new dependency,
+        its own `tiledbvcf` CLI / Python API instead of GATK's Java tool, and a
+        docs + CLAUDE.md rewrite for Script 04.
+      * Not yet benchmarked against our ACTUAL FENIX runtimes — do a timing
+        comparison on a real batch before committing, not a literature-only
+        decision.
+      * The per-chromosome SLURM launcher for S04 (section 4, "NOT yet built")
+        should probably wait on this decision rather than be built twice — a
+        TileDB-VCF rework would change the ingestion tooling it wraps.
 
 ===============================================================================
