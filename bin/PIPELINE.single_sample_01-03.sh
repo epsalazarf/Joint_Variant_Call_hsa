@@ -89,6 +89,19 @@ EXCLUDE_ARG=()
 
 # <\ENVIRONMENT> --------------------------------------------------------------
 
+# Output-presence helpers (needed by the CHECKS gate below, and again for the
+# per-step resume decisions further down).
+have_output() { find "$SAMPLE_DIR" -maxdepth 1 -name "$1" | grep -q .; }
+
+# S01 output check: accepts both *.sort.bam (current convention) and *.sorted.bam
+# (legacy naming seen on pre-existing SLE cohort dirs — same pair the S02 stage
+# already treats as equivalent when it discovers inputs; keep this consistent
+# with that, or a legacy dir with only .sorted.bam looks "unmapped" and gets
+# S01 wrongly resubmitted even though S02's output already exists).
+have_sort_bam() {
+  find "$SAMPLE_DIR" -maxdepth 1 \( -name '*.sort.bam' -o -name '*.sorted.bam' \) | grep -q .
+}
+
 # <CHECKS> --------------------------------------------------------------------
 
 for f in "$S01" "$S02" "$S03"; do
@@ -97,9 +110,15 @@ done
 
 [[ -d "$SAMPLE_DIR" ]] || { echo "<ERROR> Sample directory not found: $SAMPLE_DIR"; exit 1; }
 
-if ! find "$SAMPLE_DIR" -maxdepth 1 -name "*.f*q.gz" | grep -qE '_R?1\.f[^.]*q\.gz$'; then
-  echo "<ERROR> No FASTQ R1 files found in: $SAMPLE_DIR"
-  exit 1
+# FASTQs are only required when Step 01 would actually run. A resume-only call
+# on a dir that already has a sorted BAM (or further downstream output) — e.g.
+# archived/processed cohorts where the raw FASTQs live elsewhere entirely —
+# must not be blocked by their absence.
+if ! have_sort_bam && ! have_output "*.rmdup.mqfilt.bqsr.bam"; then
+  if ! find "$SAMPLE_DIR" -maxdepth 1 -name "*.f*q.gz" | grep -qE '_R?1\.f[^.]*q\.gz$'; then
+    echo "<ERROR> No FASTQ R1 files found in: $SAMPLE_DIR (and no existing S01/S02 output to resume from)"
+    exit 1
+  fi
 fi
 
 command -v sbatch &>/dev/null || { echo "<ERROR> sbatch not found — SLURM environment required."; exit 1; }
@@ -342,8 +361,6 @@ echo \"[i] gather done: \$_out\"
 # Skipped steps drop out of the afterok chain; the next submitted step depends
 # on the most recent job actually submitted (if any).
 
-have_output() { find "$SAMPLE_DIR" -maxdepth 1 -name "$1" | grep -q .; }
-
 # One chrom_gvcf/ entry present and non-empty (with its .tbi)?
 have_chrom_gvcf() {
   local f
@@ -368,7 +385,7 @@ SUBMITTED=()    # job ids actually submitted (for the monitor hint)
 # Walltimes are 2x the observed worst case, rounded to a 24h grid: high cluster
 # load stretches these jobs and defq has no time cap, so headroom beats reruns.
 
-if have_output "*.sort.bam"; then
+if have_sort_bam; then
   echo "[SKIP] Step 01 — sorted BAM(s) already present in ${SAMPLE_DIR}"
 else
   JOB01=$(sbatch \
@@ -390,6 +407,10 @@ fi
 
 if have_output "*.rmdup.mqfilt.bqsr.bam"; then
   echo "[SKIP] Step 02 — analysis-ready BAM already present in ${SAMPLE_DIR}"
+  # Don't let a lingering S01 dependency (e.g. S01 was redundantly resubmitted
+  # for a legacy dir, or is simply unrelated) leak forward onto S03 — S02's
+  # output already exists independent of whatever S01 is/was doing.
+  DEP=""
 else
   JOB02=$(sbatch \
     --job-name="${SAMPLE_ID}-S02-${EPOCHSECONDS}" \
