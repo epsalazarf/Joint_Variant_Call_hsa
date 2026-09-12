@@ -15,8 +15,11 @@
 #             :                   are read from <genomicsdb_path>/genomicsdb/<chrom>
 #             : output_path     — per-chrom VCFs go to <output_path>/chrom_vcf/,
 #             :                   the gathered callset to <output_path>/<cohort>.joint.vcf.gz
-#             : chrom           — chr1..chr22 | chrX | chrY | chrM | autosomes | all
+#             : chrom           — chr1..chr22 | chrX | chrY | chrM | autosomes | all |
+#             :                   a comma-separated list of the above
 #             : cohort_name     — label used in output filenames (default: "cohort")
+#             : GENO_PHASE=all (default) | scatter | gather — see the env-var block below
+#             :   and bin/supp/GENOTYPE.seq_batch-slurmer.sh for the per-chromosome launcher
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
 # =============================================================================
 #
@@ -36,7 +39,11 @@
 #       staging is implemented here pending that measurement)
 #     - GenotypeGVCFs is effectively single-threaded per contig; parallelism
 #       comes only from scattering chromosomes across separate job submissions
-#       (as Step 04 does) — no per-chromosome SLURM launcher exists yet
+#       (GENO_PHASE=scatter, then GENO_PHASE=gather — see
+#       bin/supp/GENOTYPE.seq_batch-slurmer.sh). That launcher reuses Step 04's
+#       measured GenomicsDBImport contig-size-based mem/time classes as its
+#       starting defaults, which is a placeholder for the same reason as
+#       GENO_JAVA_MEM above, not a GenotypeGVCFs-specific measurement
 #
 # ---------------------------------------------------------------------------
 #  ALLELE-SPECIFIC ANNOTATIONS — deliberately NOT enabled
@@ -87,8 +94,23 @@ echo "[i]  Cohort     : ${COHORT}"
 #   GENO_JAVA_MEM   — Java -Xms/-Xmx                       (default 6G remote / 4G local; PLACEHOLDER, see STATUS above)
 #   GENO_VERBOSITY  — GenotypeGVCFs --verbosity             (default ERROR)
 #   GENO_THREADS    — bcftools threads for the gather step  (default: $SLURM_CPUS_PER_TASK, else 2)
+#   GENO_PHASE      — all (default) | scatter | gather. `scatter` genotypes the requested
+#                     chromosome(s) only and skips the gather step — safe to run in parallel,
+#                     one chromosome per invocation, from a SLURM launcher (see
+#                     bin/supp/GENOTYPE.seq_batch-slurmer.sh). `gather` skips genotyping and
+#                     only concatenates the per-chromosome VCFs it expects to already exist
+#                     (pass it the SAME chrom selector the scatter phase was given). Running
+#                     `scatter` per-chromosome in separate processes and then `all` (or two
+#                     separate `scatter` calls) for the SAME chromosome selector would each
+#                     independently try to gather — always follow scatter with `gather`, not
+#                     `all`, when chromosomes were split across jobs.
 VERBOSITY="${GENO_VERBOSITY:-ERROR}"
 njobs="${GENO_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
+PHASE="${GENO_PHASE:-all}"
+case "$PHASE" in
+  all|scatter|gather) ;;
+  *) echo "[X]  Invalid GENO_PHASE: '$PHASE' (expected: all | scatter | gather)"; exit 1 ;;
+esac
 
 # Config file (relative to repo root)
 CONFIG_FILE="$(dirname "$(readlink -f "$0")")/../config/config.yaml"
@@ -102,7 +124,7 @@ else
   MEM="${GENO_JAVA_MEM:-4G}"
 fi
 echo "[i]  Environment: $env_type"
-echo "[i]  Knobs      : java-mem=${MEM}  verbosity=${VERBOSITY}  gather-threads=${njobs}"
+echo "[i]  Knobs      : java-mem=${MEM}  verbosity=${VERBOSITY}  gather-threads=${njobs}  phase=${PHASE}"
 
 # Parse YAML config into Bash variables (embedded parser — no external tool)
 eval "$(
@@ -151,17 +173,31 @@ AUTOSOMES=(chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 \
 ALLCHROMS=("${AUTOSOMES[@]}" chrX chrY chrM)
 CHROM_VCFS=()   # per-chromosome outputs, in canonical order, fed to the gather step
 
-## Resolve the requested selector into a list of chromosomes.
+## Resolve the requested selector into a list of chromosomes. Accepts a single
+## chrom, "autosomes", "all", or a comma-separated list of chroms (the form a
+## GENO_PHASE=gather call uses to name exactly the set a scatter launcher split
+## across jobs).
 resolve_chrom_list() {
-  case "$CHROM_ARG" in
-    autosomes) CHROMS=("${AUTOSOMES[@]}") ;;
-    all)       CHROMS=("${ALLCHROMS[@]}") ;;
-    chr[1-9]|chr1[0-9]|chr2[0-2]|chrX|chrY|chrM|chrMT)
-               CHROMS=("$CHROM_ARG") ;;
-    *) echo "[X]  Invalid chrom selector: '$CHROM_ARG'"
-       echo "[i]  Expected: chr1..chr22 | chrX | chrY | chrM | autosomes | all"
-       exit 1 ;;
-  esac
+  if [[ "$CHROM_ARG" == "autosomes" ]]; then
+    CHROMS=("${AUTOSOMES[@]}")
+  elif [[ "$CHROM_ARG" == "all" ]]; then
+    CHROMS=("${ALLCHROMS[@]}")
+  elif [[ "$CHROM_ARG" == *,* ]]; then
+    IFS=',' read -r -a CHROMS <<< "$CHROM_ARG"
+  else
+    CHROMS=("$CHROM_ARG")
+  fi
+
+  local c
+  for c in "${CHROMS[@]}"; do
+    case "$c" in
+      chr[1-9]|chr1[0-9]|chr2[0-2]|chrX|chrY|chrM|chrMT) ;;
+      *) echo "[X]  Invalid chromosome selector/entry: '$c'"
+         echo "[i]  Expected: chr1..chr22 | chrX | chrY | chrM | autosomes | all | a comma-separated list of these"
+         exit 1 ;;
+    esac
+  done
+  (( ${#CHROMS[@]} >= 1 )) || { echo "[X]  Empty chromosome selection: '$CHROM_ARG'"; exit 1; }
 }
 
 ## Match a requested chrom to the workspace directory Step 04 actually built
@@ -294,19 +330,25 @@ finisher() {
   done
 
   local final="${OUTPUT_PATH}/${COHORT}.joint.vcf.gz"
-  if [[ -s "$final" ]]; then
-    echo "[>]  $final"
-  else
-    echo "[X]  MISSING gathered cohort VCF: $final"
-    missing=1
+  if [[ "$PHASE" != "scatter" ]]; then
+    if [[ -s "$final" ]]; then
+      echo "[>]  $final"
+    else
+      echo "[X]  MISSING gathered cohort VCF: $final"
+      missing=1
+    fi
   fi
 
   echo
   if (( missing == 0 )); then
-    echo "[$] GATK GenotypeGVCFs [FENIX] completed successfully!"
-    echo "[i]  Sanity check before Step 06, e.g.:"
-    echo "[i]    bcftools stats '${final}' | grep 'number of samples:'"
-    echo "[i]  Next: Step 06 (VQSR / hard-filtering) reads '${final}'."
+    echo "[$] GATK GenotypeGVCFs [FENIX] completed successfully! (phase: ${PHASE})"
+    if [[ "$PHASE" == "scatter" ]]; then
+      echo "[i]  Scatter phase only — run with GENO_PHASE=gather (same chrom selector) to build the cohort VCF."
+    else
+      echo "[i]  Sanity check before Step 06, e.g.:"
+      echo "[i]    bcftools stats '${final}' | grep 'number of samples:'"
+      echo "[i]  Next: Step 06 (VQSR / hard-filtering) reads '${final}'."
+    fi
     echo "[&]  Total time: $(echo $(( EPOCHSECONDS - script_timestamp )) | dc -e '?60~r60~r[[0]P]szn[:]ndZ2>zn[:]ndZ2>zp')"
     exit 0
   else
@@ -325,14 +367,32 @@ main() {
 
   echo
   echo "[i]  Chromosomes to process (${#CHROMS[@]}): ${CHROMS[*]}"
-  [[ ${#CHROMS[@]} -gt 1 ]] && echo "[i]  Note: chromosomes run serially in this process — no per-chromosome" \
-                            && echo "[i]        SLURM launcher exists yet for this step (see STATUS in header)."
+  [[ ${#CHROMS[@]} -gt 1 && "$PHASE" == "all" ]] && echo "[i]  Note: chromosomes run serially in this process —" \
+    "use bin/supp/GENOTYPE.seq_batch-slurmer.sh to scatter them across jobs."
 
-  for req in "${CHROMS[@]}"; do
-    genotype_one_chrom "$req"
-  done
+  if [[ "$PHASE" != "gather" ]]; then
+    for req in "${CHROMS[@]}"; do
+      genotype_one_chrom "$req"
+    done
+  else
+    echo
+    echo "[i]  Gather-only phase — expecting per-chromosome VCFs already built"
+    for req in "${CHROMS[@]}"; do
+      local chr; chr="$(resolve_workspace_chrom "$req")"
+      local f="${OUTPUT_PATH}/chrom_vcf/${COHORT}.joint.${chr}.vcf.gz"
+      [[ -s "$f" && -s "${f}.tbi" ]] || { echo "[X]  Missing per-chromosome VCF for gather: $f"; exit 1; }
+      CHROM_VCFS+=("$f")
+      echo "[i]    found: $f"
+    done
+  fi
 
-  gather_cohort_vcf
+  if [[ "$PHASE" != "scatter" ]]; then
+    gather_cohort_vcf
+  else
+    echo
+    echo "[i]  Scatter phase done for: ${CHROMS[*]}"
+  fi
+
   finisher
 }
 

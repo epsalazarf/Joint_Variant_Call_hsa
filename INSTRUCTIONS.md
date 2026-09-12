@@ -15,8 +15,8 @@ bin/
 ├── 03_gatk_haplotype_caller.sh     # Step 03a — HaplotypeCaller (standard coverage)
 ├── 03_glimpse2_imputation.sh       # Step 03b — GLIMPSE2 imputation (low-coverage)
 ├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (beta)
-├── 05_gatk_GenotypeGVCFs.sh        # Step 05 — Joint genotyping (stub)
-├── 06_gatk_vqsr.sh                 # Step 06 — VQSR filtering (stub)
+├── 05_gatk_GenotypeGVCFs.sh        # Step 05 — Joint genotyping (draft)
+├── 06_gatk_vqsr.sh                 # Step 06 — VQSR / hard-filtering (draft)
 └── supp/
     ├── 00_scan_fastq_pairs.sh              # Inspect FASTQ pairs before mapping
     ├── 00_glimpse2_ref_panel_prep.sh       # Prepare GLIMPSE2 binary reference panel
@@ -25,6 +25,8 @@ bin/
     ├── BWAMAP.seq_batch-slurmer.sh         # Batch SLURM launcher for Step 01
     ├── BAMQC.seq_batch-slurmer.sh          # Batch SLURM launcher for Step 02
     ├── HAPCALL.seq_batch-slurmer.sh        # Batch SLURM launcher for Step 03a
+    ├── GENOTYPE.seq_batch-slurmer.sh       # Per-chromosome scatter+gather launcher for Step 05
+    ├── VQSR.seq_batch-slurmer.sh           # SLURM launcher for Step 06
     ├── PIPELINE.single_sample.sh           # End-to-end single-sample launcher
     └── run_pipeline.sh                     # Full pipeline wrapper (stub)
 ```
@@ -357,12 +359,33 @@ bash bin/05_gatk_GenotypeGVCFs.sh <genomicsdb_path> <output_path> chr22 my_cohor
 |----------|---------|
 | `genomicsdb_path` | the `output_path` given to Step 04 — workspaces are read from `<genomicsdb_path>/genomicsdb/<chrom>` |
 | `output_path` | where this step writes its own outputs (see below) |
-| `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` |
+| `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` \| a comma-separated list of the above |
 | `cohort_name` | optional label used in output filenames (default: `cohort`) |
 
 `autosomes` / `all` genotype every chromosome **serially in one process** —
-fine for tests and small cohorts; no per-chromosome SLURM launcher exists yet
-for this step.
+fine for tests and small cohorts.
+
+### Scatter across SLURM jobs (real cohorts)
+
+```bash
+bash bin/supp/GENOTYPE.seq_batch-slurmer.sh [options] <genomicsdb_path> <output_path> <cohort_name>
+```
+
+Submits one job per chromosome (`GENO_PHASE=scatter`), then a final job
+(`GENO_PHASE=gather`, `--dependency=afterok` on every scatter job) that
+concatenates them into the cohort VCF. See `--help` for `--chroms` /
+`--cpus` / `--mem` / `--hours` / `--gather-mem` / `--gather-hours`, and
+`report <manifest_file>` for post-run `sacct` timings. Memory/time defaults
+are chromosome-scaled the way Step 04's are, borrowed as a starting point —
+see the STATUS block in `bin/05_gatk_GenotypeGVCFs.sh` for why that's a
+placeholder, not a measurement, for this step.
+
+Do **not** call `05_gatk_GenotypeGVCFs.sh` directly with `GENO_PHASE=all` for
+a chromosome set that a scatter run already split across jobs — each
+`GENO_PHASE=all` (or `scatter`) job only knows its own chromosome(s), so
+running the gather step per-job would each independently (and wrongly)
+overwrite the cohort VCF. Follow scatter with `GENO_PHASE=gather` (same
+chrom selector), which the launcher already does for you.
 
 ### Output
 
@@ -414,6 +437,18 @@ bash bin/06_gatk_vqsr.sh <joint_vcf> <output_path> [vqsr|hard-filter|auto] my_co
 measurement) or more, else `hard-filter`. Pass the mode explicitly once the
 cohort-size decision in [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md) is
 settled, rather than relying on the heuristic.
+
+### Submit as a SLURM job
+
+```bash
+bash bin/supp/VQSR.seq_batch-slurmer.sh [options] <joint_vcf> <output_path> [mode] [cohort_name]
+```
+
+Unlike Steps 04/05, Step 06 is per-cohort rather than per-chromosome, so this
+launcher submits a single job (no scatter/gather). See `--help` for
+`--cpus`/`--mem`/`--hours`, and `report <manifest_file>` for post-run `sacct`
+timings. Its `--mem`/`--hours` defaults (16G/24h) are unmeasured placeholders,
+same caveat as the standalone script's STATUS block.
 
 ### Output
 

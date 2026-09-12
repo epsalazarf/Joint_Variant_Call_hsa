@@ -80,8 +80,10 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 - **Known gaps** — Java heap sizing is a placeholder copied from S04's
   measured GenomicsDBImport footprint, not GenotypeGVCFs' own; no
   scratch-staging of the GenomicsDB read path (unlike S04's write path,
-  unbenchmarked); no per-chromosome SLURM launcher. See the STATUS block in
-  `bin/05_gatk_GenotypeGVCFs.sh`.
+  unbenchmarked). `bin/supp/GENOTYPE.seq_batch-slurmer.sh` now scatters one
+  job per chromosome (`GENO_PHASE=scatter`) plus a chained gather job
+  (`GENO_PHASE=gather`), but reuses S04's mem/time classes as an unvalidated
+  starting point. See the STATUS block in `bin/05_gatk_GenotypeGVCFs.sh`.
 
 ### S06 input/output contract (built, not yet run)
 
@@ -104,7 +106,11 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
   `hardfilter_work/`.
 - **Known gaps** — Java heap defaults are placeholders, not measurements;
   `VQSR_MIN_SAMPLES=30` is a commonly cited GATK rule of thumb, not validated
-  against this project's cohorts; no SLURM launcher. See the STATUS block in
+  against this project's cohorts. `bin/supp/VQSR.seq_batch-slurmer.sh` submits
+  this step as a single job (S06 is per-cohort, not per-chromosome — nothing
+  to scatter at that level); its own possible internal parallelism (SNP vs
+  INDEL recal, or the two hard-filter branches, as separate jobs before a
+  final merge) is deliberately not implemented — see the STATUS block in
   `bin/06_gatk_vqsr.sh`.
 
 ---
@@ -116,7 +122,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | S04 not yet run on FENIX with real GVCFs | S04 → prod | **run `test/jaguar/`** — 93 samples, 3 waves (create+update+update), chr22; confirm scratch copy-back + module load + truncation flag |
 | No per-chromosome SLURM launcher for S04 | S04 batch use | build `GENDBI.seq_batch-slurmer.sh` after S04 validated (S04 can loop chroms serially meanwhile) |
 | S05 not yet run against a real GenomicsDB | S05 → prod | test locally against a small synthetic workspace, then on FENIX against a real S04 chr22 output; measure GenotypeGVCFs heap/wall-time to replace the placeholder `GENO_JAVA_MEM` default |
-| No per-chromosome SLURM launcher for S05 | S05 batch use | build after S05 validated (S05 can loop chroms serially meanwhile) |
+| S05/S06 SLURM launchers built but unrun | S05/S06 batch use | `bin/supp/GENOTYPE.seq_batch-slurmer.sh` (per-chromosome scatter+gather) and `bin/supp/VQSR.seq_batch-slurmer.sh` (single job) exist now — validate against a real cohort alongside the standalone scripts above; their mem/time defaults inherit the same unmeasured-placeholder caveat |
 | VQSR resource files are `EDIT_THIS` placeholders in `config/config.yaml` | S06 vqsr mode → prod | stage the GATK hg38 bundle (hapmap/omni/1000G SNPs/Mills indels) on FENIX, then point `ref_hapmap`/`ref_omni`/`ref_1kg_snp`/`ref_mills` at the real files — S06 refuses to run vqsr mode until then |
 | Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; S06's `auto` mode defaults to a `VQSR_MIN_SAMPLES=30` heuristic (unmeasured against this project's cohorts) pending that decision |
 | S06 not yet run against a real joint VCF (either mode) | S06 → prod | test hard-filter mode first (no extra resources needed) against a small synthetic/real joint VCF, then vqsr mode once the resource bundle is staged |
