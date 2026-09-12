@@ -378,17 +378,51 @@ producing a malformed callset.
 
 ---
 
-## Step 06 — VQSR / Filtering (stub)
+## Step 06 — VQSR / Hard-Filtering (cohort-level)
 
-Not yet implemented; on hold until Step 05 is validated and the
-VQSR-vs-hard-filter decision for early cohort sizes is made.
+Filters the gathered joint VCF from Step 05. Two paths, chosen automatically
+from cohort size or forced explicitly:
 
-| Step | Script | Purpose |
-|------|--------|---------|
-| 06 | `bin/06_gatk_vqsr.sh` | VQSR (or hard-filter) of the joint VCF — **needs new config keys for VQSR resources** |
+- `vqsr` — VariantRecalibrator + ApplyVQSR (SNP and INDEL modes, chained).
+  Needs the GATK hg38 resource bundle (`ref_hapmap`, `ref_omni`,
+  `ref_1kg_snp`, `ref_mills` in `config/config.yaml`).
+- `hard-filter` — GATK's standard hard-filter expressions (SNP and INDEL,
+  merged). No extra resource files; the right choice while a cohort is too
+  small for VQSR's Gaussian mixture model to converge.
 
-Do not use it for production runs. Watch the pipeline overview table in
-[README.md](README.md) and [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md).
+> **Draft** — written against GATK4's published Best Practices recipes, not
+> yet run on FENIX or against a real joint VCF, and the VQSR resource bundle
+> is not staged yet (`ref_hapmap`/`ref_omni`/`ref_1kg_snp`/`ref_mills` are
+> `EDIT_THIS` placeholders in `config/config.yaml`). See the STATUS block in
+> the script header before using it for anything but testing.
+
+### Run
+
+```bash
+bash bin/06_gatk_vqsr.sh <joint_vcf> <output_path> [vqsr|hard-filter|auto] my_cohort
+```
+
+| Argument | Meaning |
+|----------|---------|
+| `joint_vcf` | the gathered `<cohort>.joint.vcf.gz` from Step 05 |
+| `output_path` | where the filtered VCF and intermediates are written |
+| `mode` | `vqsr` \| `hard-filter` \| `auto` (default: `auto`) |
+| `cohort_name` | optional label for output filenames (default: derived from `joint_vcf`'s own name) |
+
+`auto` counts samples in `joint_vcf` and picks `vqsr` at `VQSR_MIN_SAMPLES`
+(default 30 — a commonly cited GATK rule of thumb, not a project-specific
+measurement) or more, else `hard-filter`. Pass the mode explicitly once the
+cohort-size decision in [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md) is
+settled, rather than relying on the heuristic.
+
+### Output
+
+| Path | Description |
+|------|-------------|
+| `<output_path>/<cohort>.filtered.vcf.gz` | final callset — `FILTER` is annotated (`PASS` or a reason), records are not removed |
+| `<output_path>/vqsr_work/` or `<output_path>/hardfilter_work/` | per-mode intermediates (recal/tranches files, or per-type selected/filtered VCFs) |
+
+Extract `PASS`-only variants downstream with `bcftools view -f PASS`.
 
 ---
 

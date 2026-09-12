@@ -6,12 +6,25 @@ about: Config file for references and modules
 # scratch_root    : fixed scratch tree for S04 / supp scripts (legacy; still group-pinned)
 # sbatch_exclude  : comma-separated nodes to keep jobs off (broken mounts etc.); "" = none
 # min_free_gb     : S01-03 launcher aborts if the output filesystem has less free; 0 = no check
+#
+# ref_hapmap, ref_omni, ref_1kg_snp  : SNP VQSR training/truth resources (Step 06)
+# ref_mills                          : INDEL VQSR training/truth resource (Step 06)
+# ref_axiom                          : OPTIONAL extra INDEL VQSR training resource (Step 06);
+#                                       "" = skip it, VariantRecalibrator runs without it
+# All five are EDIT_THIS placeholders below — the GATK hg38 resource bundle is not yet
+# staged on FENIX (see docs/PIPELINE_STATUS.md blockers). Step 06 refuses to run in
+# vqsr mode until the required four point at real files.
 
 remote:
   ref_gnm: "/mnt/data/amedina/esalazarf/References/hg38/hg38.fa"
   ref_vars: "/mnt/data/amedina/esalazarf/References/dbsnp157/dbSNP157.canon_chr.vcf.gz"
   ref_panel: "/mnt/data/fsanchezq/esalazarf/References/hg38/H1K2/current_release"
   ref_gmap: "/mnt/data/fsanchezq/esalazarf/References/hg38/genetic_maps.b38"
+  ref_hapmap: "/mnt/data/amedina/esalazarf/References/EDIT_THIS/hapmap_3.3.hg38.vcf.gz"
+  ref_omni: "/mnt/data/amedina/esalazarf/References/EDIT_THIS/1000G_omni2.5.hg38.vcf.gz"
+  ref_1kg_snp: "/mnt/data/amedina/esalazarf/References/EDIT_THIS/1000G_phase1.snps.high_confidence.hg38.vcf.gz"
+  ref_mills: "/mnt/data/amedina/esalazarf/References/EDIT_THIS/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+  ref_axiom: ""
   scratch_base: "/scratch/groups"
   scratch_root: "/scratch/groups/amedina"
   sbatch_exclude: "node09,node15"
@@ -23,6 +36,11 @@ local:
   ref_vars: "$HOME/Data/REFx/dbSNP157/dbSNP157.canon_chr.vcf.gz"
   ref_panel: "$HOME/Data/HGDP+1KGP.v2/current_release"
   ref_gmap: "$HOME/Data/REFx/EDIT_THIS/genetic_maps.b38"
+  ref_hapmap: "$HOME/Data/REFx/EDIT_THIS/hapmap_3.3.hg38.vcf.gz"
+  ref_omni: "$HOME/Data/REFx/EDIT_THIS/1000G_omni2.5.hg38.vcf.gz"
+  ref_1kg_snp: "$HOME/Data/REFx/EDIT_THIS/1000G_phase1.snps.high_confidence.hg38.vcf.gz"
+  ref_mills: "$HOME/Data/REFx/EDIT_THIS/Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+  ref_axiom: ""
   scratch_base: ""
   scratch_root: ""
   sbatch_exclude: ""

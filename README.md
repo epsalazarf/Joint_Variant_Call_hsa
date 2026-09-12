@@ -67,7 +67,7 @@ FASTQ reads
 | 03b | `03_glimpse2_imputation.sh` | **Paused** — reference chunks not yet generated |
 | 04 | `04_gatk_GenomicsDB_import.sh` | **Functional** — validated on FENIX (JAGUAR chr22, 93 samples, 3-wave incremental); whole-genome scatter pending |
 | 05 | `05_gatk_GenotypeGVCFs.sh` | **Drafted** — not yet run; awaiting Step 04 validation on FENIX |
-| 06 | `06_gatk_vqsr.sh` | Stub |
+| 06 | `06_gatk_vqsr.sh` | **Drafted** — VQSR or hard-filter (auto-selected by cohort size); VQSR path needs the GATK resource bundle staged on FENIX |
 
 See [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md) for the full status report and [docs/S04_GenomicsDBImport_design.md](docs/S04_GenomicsDBImport_design.md) for Step 04 design notes.
 
@@ -81,10 +81,12 @@ Edit `config/config.yaml` with environment-specific paths under `remote:` and `l
 
 | Key | Used in |
 |-----|---------|
-| `ref_gnm` | Steps 01, 02, 03a |
-| `ref_vars` | Step 02 (BQSR) |
+| `ref_gnm` | Steps 01, 02, 03a, 05, 06 |
+| `ref_vars` | Steps 02 (BQSR), 03a, 05, 06 (dbSNP resource) |
 | `ref_panel` | Step 03b |
 | `ref_gmap` | Step 03b |
+| `ref_hapmap`, `ref_omni`, `ref_1kg_snp` | Step 06, VQSR mode only (SNP training/truth) |
+| `ref_mills`, `ref_axiom` | Step 06, VQSR mode only (INDEL training/truth; `ref_axiom` optional) |
 
 ---
 

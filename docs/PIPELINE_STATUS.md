@@ -17,7 +17,7 @@
 | 03b | `bin/03_glimpse2_imputation.sh` | ⏸ Paused | per sample | low-coverage imputation; ref chunks not generated; **not** a GVCF producer |
 | **04** | **`bin/04_gatk_GenomicsDB_import.sh`** | ✅ **Validated on FENIX** | **per cohort, per chromosome** | **JAGUAR chr22, 93 samples, 3-wave incremental (test01, 2026-09-01); whole-genome scatter + shared-perms setup still to do** |
 | 05 | `bin/05_gatk_GenotypeGVCFs.sh` | 🟡 Built, not yet run | per cohort, per chromosome | GenotypeGVCFs (`gendb://`) + gather; awaits S04 validation on FENIX and a real test run |
-| 06 | `bin/06_gatk_vqsr.sh` | ⛔ Stub (empty) | per cohort | on hold; **config gap — VQSR resources missing** |
+| 06 | `bin/06_gatk_vqsr.sh` | 🟡 Built, not yet run | per cohort | VQSR or hard-filter (auto-selected by sample count); **config gap — VQSR resource files still `EDIT_THIS` placeholders** |
 | — | `bin/supp/run_pipeline.sh` | ⛔ Stub (2 lines) | — | end-to-end wrapper |
 
 Legend: ✅ working · 🟡 built, not yet run on real cluster data · ⏸ deliberately paused · ⛔ not implemented
@@ -44,7 +44,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
    │  05_gatk_GenotypeGVCFs.sh       (gendb://<CHR>, per chromosome, then gather)   ── BUILT, NOT RUN
    ▼
 <cohort>.joint.vcf.gz                                   [joint-genotyped multi-sample VCF]
-   │  06_gatk_vqsr.sh                (SNP + INDEL passes, or hard-filter)          ── NOT BUILT
+   │  06_gatk_vqsr.sh                (SNP + INDEL passes, or hard-filter)          ── BUILT, NOT RUN
    ▼
 <cohort>.filtered.vcf.gz                                [final callset]
 ```
@@ -83,6 +83,30 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
   unbenchmarked); no per-chromosome SLURM launcher. See the STATUS block in
   `bin/05_gatk_GenotypeGVCFs.sh`.
 
+### S06 input/output contract (built, not yet run)
+
+- **Input** — the Step 05 `<cohort>.joint.vcf.gz` (indexed), an `output_path`,
+  an optional `mode` (`vqsr` \| `hard-filter` \| `auto`, default `auto`), and
+  an optional `cohort_name`.
+- **Mode selection** — `auto` counts samples via `bcftools query -l` and picks
+  `vqsr` at `VQSR_MIN_SAMPLES` (default 30) or more, else `hard-filter`;
+  either can be forced explicitly regardless of sample count.
+- **vqsr path** — VariantRecalibrator (SNP, INDEL) → ApplyVQSR (INDEL then
+  SNP, chained onto one output) using the non-allele-specific annotation set
+  (matches S05, which does not request AS annotations either). Requires
+  `ref_hapmap`/`ref_omni`/`ref_1kg_snp`/`ref_mills` (all currently `EDIT_THIS`
+  placeholders); `ref_axiom` is optional and skipped when unset.
+- **hard-filter path** — SelectVariants + VariantFiltration per variant type
+  using GATK's published hard-filter expressions, then `gatk MergeVcfs`. No
+  extra resource files.
+- **Output** — `<output_path>/<cohort>.filtered.vcf.gz` (FILTER annotated,
+  records not removed) plus per-mode intermediates under `vqsr_work/` or
+  `hardfilter_work/`.
+- **Known gaps** — Java heap defaults are placeholders, not measurements;
+  `VQSR_MIN_SAMPLES=30` is a commonly cited GATK rule of thumb, not validated
+  against this project's cohorts; no SLURM launcher. See the STATUS block in
+  `bin/06_gatk_vqsr.sh`.
+
 ---
 
 ## 3. What blocks the next steps
@@ -93,8 +117,9 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | No per-chromosome SLURM launcher for S04 | S04 batch use | build `GENDBI.seq_batch-slurmer.sh` after S04 validated (S04 can loop chroms serially meanwhile) |
 | S05 not yet run against a real GenomicsDB | S05 → prod | test locally against a small synthetic workspace, then on FENIX against a real S04 chr22 output; measure GenotypeGVCFs heap/wall-time to replace the placeholder `GENO_JAVA_MEM` default |
 | No per-chromosome SLURM launcher for S05 | S05 batch use | build after S05 validated (S05 can loop chroms serially meanwhile) |
-| VQSR resource files absent from `config/config.yaml` | S05→S06 | add `ref_hapmap` / `ref_omni` / `ref_1kg_snp` / `ref_mills`; stage files on FENIX |
-| Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; small early cohorts need hard-filtering path |
+| VQSR resource files are `EDIT_THIS` placeholders in `config/config.yaml` | S06 vqsr mode → prod | stage the GATK hg38 bundle (hapmap/omni/1000G SNPs/Mills indels) on FENIX, then point `ref_hapmap`/`ref_omni`/`ref_1kg_snp`/`ref_mills` at the real files — S06 refuses to run vqsr mode until then |
+| Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; S06's `auto` mode defaults to a `VQSR_MIN_SAMPLES=30` heuristic (unmeasured against this project's cohorts) pending that decision |
+| S06 not yet run against a real joint VCF (either mode) | S06 → prod | test hard-filter mode first (no extra resources needed) against a small synthetic/real joint VCF, then vqsr mode once the resource bundle is staged |
 | S03b produces phased VCF, not GVCF | pipeline diagram accuracy | when un-pausing 03b, add a `bcftools merge` path — do **not** route through S04/S05 |
 
 ---
@@ -110,7 +135,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | Keep GenomicsDB off networked filesystems during import | S04 builds on `/scratch`, copies back | ✅ |
 | Incremental import for growing cohorts | S04 `update` action | ✅ |
 | Joint genotyping with GenotypeGVCFs (`gendb://`) | S05 — built, not yet run | 🟡 pending validation |
-| Filter with VQSR (or hard-filter for small cohorts) | S06 — not built | ⛔ pending |
+| Filter with VQSR (or hard-filter for small cohorts) | S06 — built, not yet run | 🟡 pending validation + resource bundle |
 
 ---
 
