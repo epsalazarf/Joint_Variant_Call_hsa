@@ -16,7 +16,7 @@
 | 03a | `bin/03_gatk_haplotype_caller.sh` | ✅ Functional | per sample | GVCF mode → canon-chr GVCF → `chrom_gvcf/*.raw_vars.<CHR>.g.vcf.gz` |
 | 03b | `bin/03_glimpse2_imputation.sh` | ⏸ Paused | per sample | low-coverage imputation; ref chunks not generated; **not** a GVCF producer |
 | **04** | **`bin/04_gatk_GenomicsDB_import.sh`** | ✅ **Validated on FENIX** | **per cohort, per chromosome** | **JAGUAR chr22, 93 samples, 3-wave incremental (test01, 2026-09-01); whole-genome scatter + shared-perms setup still to do** |
-| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | ⛔ Stub (empty) | per cohort, per chromosome | on hold until S04 proven |
+| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | 🟡 Built, not yet run | per cohort, per chromosome | GenotypeGVCFs (`gendb://`) + gather; awaits S04 validation on FENIX and a real test run |
 | 06 | `bin/06_gatk_vqsr.sh` | ⛔ Stub (empty) | per cohort | on hold; **config gap — VQSR resources missing** |
 | — | `bin/supp/run_pipeline.sh` | ⛔ Stub (2 lines) | — | end-to-end wrapper |
 
@@ -41,7 +41,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
    │  04_gatk_GenomicsDB_import.sh   (cohort-level; one workspace per chromosome)
    ▼
 <out>/genomicsdb/<CHR>/                                 [GenomicsDB workspace per chromosome]
-   │  05_gatk_GenotypeGVCFs.sh       (gendb://<CHR>, per chromosome, then gather)   ── NOT BUILT
+   │  05_gatk_GenotypeGVCFs.sh       (gendb://<CHR>, per chromosome, then gather)   ── BUILT, NOT RUN
    ▼
 <cohort>.joint.vcf.gz                                   [joint-genotyped multi-sample VCF]
    │  06_gatk_vqsr.sh                (SNP + INDEL passes, or hard-filter)          ── NOT BUILT
@@ -68,6 +68,21 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
   the fragment directory `<CHR>$1$<len>`.
 - Consumed by Step 05 as `gendb://<output_path>/genomicsdb/<CHR>`.
 
+### S05 input/output contract (built, not yet run)
+
+- **Input** — the Step 04 `output_path` (workspaces read from
+  `<genomicsdb_path>/genomicsdb/<CHR>`), plus `output_path` and a `chrom`
+  selector identical in shape to Step 04's, plus an optional `cohort_name`.
+- **Output** — `<output_path>/chrom_vcf/<cohort>.joint.<CHR>.vcf.gz` per
+  chromosome, then `<output_path>/<cohort>.joint.vcf.gz` gathered across all
+  requested chromosomes (`bcftools concat`, after checking every
+  per-chromosome VCF carries the same sample set).
+- **Known gaps** — Java heap sizing is a placeholder copied from S04's
+  measured GenomicsDBImport footprint, not GenotypeGVCFs' own; no
+  scratch-staging of the GenomicsDB read path (unlike S04's write path,
+  unbenchmarked); no per-chromosome SLURM launcher. See the STATUS block in
+  `bin/05_gatk_GenotypeGVCFs.sh`.
+
 ---
 
 ## 3. What blocks the next steps
@@ -76,6 +91,8 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 |---------|---------|--------------|
 | S04 not yet run on FENIX with real GVCFs | S04 → prod | **run `test/jaguar/`** — 93 samples, 3 waves (create+update+update), chr22; confirm scratch copy-back + module load + truncation flag |
 | No per-chromosome SLURM launcher for S04 | S04 batch use | build `GENDBI.seq_batch-slurmer.sh` after S04 validated (S04 can loop chroms serially meanwhile) |
+| S05 not yet run against a real GenomicsDB | S05 → prod | test locally against a small synthetic workspace, then on FENIX against a real S04 chr22 output; measure GenotypeGVCFs heap/wall-time to replace the placeholder `GENO_JAVA_MEM` default |
+| No per-chromosome SLURM launcher for S05 | S05 batch use | build after S05 validated (S05 can loop chroms serially meanwhile) |
 | VQSR resource files absent from `config/config.yaml` | S05→S06 | add `ref_hapmap` / `ref_omni` / `ref_1kg_snp` / `ref_mills`; stage files on FENIX |
 | Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; small early cohorts need hard-filtering path |
 | S03b produces phased VCF, not GVCF | pipeline diagram accuracy | when un-pausing 03b, add a `bcftools merge` path — do **not** route through S04/S05 |
@@ -92,7 +109,7 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | Use `--sample-name-map` for scalable cohorts | S04 builds it per chromosome | ✅ |
 | Keep GenomicsDB off networked filesystems during import | S04 builds on `/scratch`, copies back | ✅ |
 | Incremental import for growing cohorts | S04 `update` action | ✅ |
-| Joint genotyping with GenotypeGVCFs (`gendb://`) | S05 — not built | ⛔ pending |
+| Joint genotyping with GenotypeGVCFs (`gendb://`) | S05 — built, not yet run | 🟡 pending validation |
 | Filter with VQSR (or hard-filter for small cohorts) | S06 — not built | ⛔ pending |
 
 ---

@@ -338,16 +338,56 @@ success.
 
 ---
 
-## Steps 05–06 — Joint Genotyping and Filtering (stubs)
+## Step 05 — Joint Genotyping (cohort-level)
 
-Not yet implemented; on hold until Step 04 is validated on FENIX.
+Runs GenotypeGVCFs against each per-chromosome GenomicsDB workspace from
+Step 04, then gathers the results into one cohort-level VCF.
+
+> **Draft** — written against Step 04's design, not yet run on FENIX or
+> against a real workspace. See the STATUS block in the script header before
+> using it for anything but testing.
+
+### Run (single chromosome — start here for testing)
+
+```bash
+bash bin/05_gatk_GenotypeGVCFs.sh <genomicsdb_path> <output_path> chr22 my_cohort
+```
+
+| Argument | Meaning |
+|----------|---------|
+| `genomicsdb_path` | the `output_path` given to Step 04 — workspaces are read from `<genomicsdb_path>/genomicsdb/<chrom>` |
+| `output_path` | where this step writes its own outputs (see below) |
+| `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` |
+| `cohort_name` | optional label used in output filenames (default: `cohort`) |
+
+`autosomes` / `all` genotype every chromosome **serially in one process** —
+fine for tests and small cohorts; no per-chromosome SLURM launcher exists yet
+for this step.
+
+### Output
+
+| Path | Description |
+|------|-------------|
+| `<output_path>/chrom_vcf/<cohort>.joint.<CHR>.vcf.gz` | per-chromosome joint-genotyped VCF |
+| `<output_path>/<cohort>.joint.vcf.gz` | gathered cohort-level callset (input for Step 06) |
+
+Before gathering, the script checks that every per-chromosome VCF carries the
+same sample set — an uneven Step 04 wave import (a sample added to some
+chromosomes' workspaces but not others) is caught here rather than silently
+producing a malformed callset.
+
+---
+
+## Step 06 — VQSR / Filtering (stub)
+
+Not yet implemented; on hold until Step 05 is validated and the
+VQSR-vs-hard-filter decision for early cohort sizes is made.
 
 | Step | Script | Purpose |
 |------|--------|---------|
-| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | Joint genotyping across all samples (`gendb://` per chromosome) |
 | 06 | `bin/06_gatk_vqsr.sh` | VQSR (or hard-filter) of the joint VCF — **needs new config keys for VQSR resources** |
 
-Do not use these for production runs. Watch the pipeline overview table in
+Do not use it for production runs. Watch the pipeline overview table in
 [README.md](README.md) and [docs/PIPELINE_STATUS.md](docs/PIPELINE_STATUS.md).
 
 ---
