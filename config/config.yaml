@@ -14,7 +14,7 @@ remote:
   ref_gmap: "/mnt/data/fsanchezq/esalazarf/References/hg38/genetic_maps.b38"
   scratch_base: "/scratch/groups"
   scratch_root: "/scratch/groups/amedina"
-  sbatch_exclude: "node09,node15"
+  sbatch_exclude: "node15"
   min_free_gb: "2000"
   modules: "gatk samtools mosdepth r/4.4.1"
 
