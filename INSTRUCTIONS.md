@@ -98,10 +98,16 @@ Both arguments default to `$PWD`.
 ### Batch (SLURM)
 
 ```bash
-bash bin/supp/BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads.sh /path/to/samples/
+bash bin/supp/BWAMAP.seq_batch-slurmer.sh bin/01_bwa_map_fastq_reads.sh /path/to/fastq_samples/ /path/to/bams/
 ```
 
 Auto-discovers sample subdirectories and submits one job per sample (parallel). Wait for all jobs to finish before running Step 02.
+
+**Output location (3rd argument, optional):**
+- Given → BAMs are written to `/path/to/bams/<SAMPLE>/` (created if missing). Pass the same `/path/to/bams/` to the Step 02 batch slurmer.
+- Omitted → BAMs are written **inside each FASTQ sample directory** (legacy behaviour). In that case point the Step 02 slurmer at the FASTQ parent directory, or symlink the `*.sort.bam` files into your BAM directory first — the Step 02 slurmer only searches the directory it is given.
+
+> For new samples, the one-command launchers (`PIPELINE.single_sample_01-03.sh` / `BATCH.submit_S01-S03.sh`, see top of this file / README) are simpler: they chain 01→02→03 in the sample directory and avoid this hand-off entirely.
 
 ```bash
 squeue -u $USER | grep BWAMAP
@@ -148,11 +154,12 @@ The fourth argument (`add_rg`) controls read group assignment: `auto` (default) 
 ### Batch (SLURM)
 
 ```bash
-bash bin/supp/BAMQC.seq_batch-slurmer.sh batch-list.txt bin/02_gatk_bam_qc_workflow.sh /path/to/bams/
+bash bin/supp/BAMQC.seq_batch-slurmer.sh bin/02_gatk_bam_qc_workflow.sh /path/to/bams/
 ```
 
-`batch-list.txt` is tab-separated: `sample_name  sample_file  readgroup_string`.  
-Each sample is submitted as an independent job (8 CPUs / 32 GB).
+Recursively finds every `*.sort.bam` / `*.sorted.bam` under `/path/to/bams/` (use the Step 01 output directory), groups them by sample ID (text before the first `_`, so per-lane BAMs are merged), symlinks them into `/path/to/bams/<SAMPLE>/`, and submits one independent job per sample (8 CPUs / 32 GB, parallel). Step 02 outputs land in `/path/to/bams/<SAMPLE>/`.
+
+The discovered list is saved as `<dir>.bamqc_input_files.txt` (tab-separated: `sample_name  sample_file(s)  readgroup_string`). If that file already exists it is reused instead of re-scanning — edit it to add an RG string for legacy BAMs, or delete it to force a fresh scan.
 
 ```bash
 squeue -u $USER | grep BAMQC
