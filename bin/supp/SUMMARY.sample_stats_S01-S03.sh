@@ -10,7 +10,7 @@
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-09-28
-# Version     : 1.1
+# Version     : 1.3
 # Usage       : SUMMARY.sample_stats_S01-S03.sh <dir> [dir ...] [-o out.tsv]
 #                 [--gvcf-depth[=fast|full]] [-j threads]
 #               dir — a sample dir (as laid out by PIPELINE.single_sample_01-03.sh)
@@ -34,7 +34,8 @@
 #        *.rmb.mosdepth.summary.txt (autosomal mean = Σbases/Σlength, chr1–22,
 #        same as archive/filter_mosdepth_nuclear.sh)
 #   S03  chrom_gvcf/*.raw_vars.<chrom>.g.vcf.gz, *.raw_variants.canon_chr.g.vcf.gz
-#   Time "[&]  Total time:" line of the most recent SUCCESSFUL log per step.
+#   Time "[&]  Total time:" line of the most recent SUCCESSFUL log per step
+#        (legacy logs: "<SUCCESS> ..." + "> Processing Time:").
 #        Logs are searched in <sample>/log/ and <sample>/ and classified by
 #        their banner, so filenames don't matter. S03 scatter: s03_time_max is
 #        the slowest chromosome (≈ wall time), s03_time_sum the total compute.
@@ -72,10 +73,12 @@ done
 CANON_CHROMS="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrX chrY chrM"
 CANON_N=25
 
-# Banner strings printed by each step script (first lines of its log)
+# Banner regexes (case-insensitive) printed by each step script in the first
+# lines of its log — current and legacy wording (e.g. "<START> GATK HAPLOTYPE
+# CALLER [FENIX]", "<START> GATK4 BAM QC +ALT [FENIX]").
 BANNER_S01='BWA FASTQ Reads Mapper'
 BANNER_S02='GATK4 BAM QC'
-BANNER_S03='GATK HaplotypeCaller'
+BANNER_S03='GATK HAPLOTYPE ?CALLER'
 
 AUTOSOMES="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22"
 FAST_CHROM="chr20"   # GATK's usual benchmark chromosome: mid-sized, typical content
@@ -91,7 +94,8 @@ fi
 # <FUNCTIONS> -----------------------------------------------------------------
 
 ## Size of one file in bytes (GNU stat on FENIX, BSD stat locally)
-fsize() { stat -c%s "$1" 2>/dev/null || stat -f%z "$1" 2>/dev/null || echo 0; }
+## Files may be symlinks (legacy BAMs, staged FASTQs), hence \( -type f -o -type l \) below.
+fsize() { stat -Lc%s "$1" 2>/dev/null || stat -Lf%z "$1" 2>/dev/null || echo 0; }   # -L: follow symlinks
 
 ## Sum sizes of the files given as args → GiB (2 dp), "NA" if none exist
 sum_gib() {
@@ -115,18 +119,18 @@ to_hms() {
 ## Logs for one step, oldest → newest (by mtime), matched on banner text
 step_logs() {   # $1 = sample dir   $2 = banner
   local d="$1"
-  find "$d/log" "$d" -maxdepth 1 -type f -name '*.log' 2>/dev/null \
+  find -H "$d/log" "$d" -maxdepth 1 \( -type f -o -type l \) -name '*.log' 2>/dev/null \
     | while IFS= read -r f; do
-        head -30 "$f" 2>/dev/null | grep -qF "$2" && printf '%s\t%s\n' "$(fsize_mtime "$f")" "$f"
+        head -30 "$f" 2>/dev/null | grep -qiE "$2" && printf '%s\t%s\n' "$(fsize_mtime "$f")" "$f"
       done | sort -n | cut -f2- | awk '!seen[$0]++'
 }
 fsize_mtime() { stat -c%Y "$1" 2>/dev/null || stat -f%m "$1" 2>/dev/null || echo 0; }
 
 ## Total-time seconds from a log if it completed successfully, else empty
 log_ok_seconds() {
-  grep -q 'completed successfully' "$1" 2>/dev/null || return 0
+  grep -qE 'completed successfully|^<SUCCESS>' "$1" 2>/dev/null || return 0
   local t
-  t=$(grep -E '^\[&\] +Total time:' "$1" | tail -1 | awk '{print $NF}')
+  t=$(grep -E '^(\[&\] +Total time|> Processing Time):' "$1" | tail -1 | awk '{print $NF}')
   [ -n "$t" ] && to_sec "$t"
 }
 
@@ -216,6 +220,28 @@ mosdepth_means() {
     }' "$1"
 }
 
+## Container of a (b)gzipped variant file: vcf | bcf | "?" (unreadable)
+## Legacy S03 wrote the canon GVCF with bcftools -O b under a .g.vcf.gz name;
+## GATK (htsjdk) can't read bcftools' BCF 2.2, so Step 04 would fail on it.
+gvcf_container() {
+  case "$(gzip -dc "$1" 2>/dev/null | head -c 3)" in
+    BCF) echo bcf ;; '##f') echo vcf ;; *) echo '?' ;;
+  esac
+}
+
+## Summarise containers of several files: vcf | bcf | mixed(<n>bcf) | NA
+container_summary() {
+  [ $# -gt 0 ] || { echo NA; return; }
+  local f v=0 b=0 u=0
+  for f in "$@"; do
+    case "$(gvcf_container "$f")" in vcf) v=$((v+1)) ;; bcf) b=$((b+1)) ;; *) u=$((u+1)) ;; esac
+  done
+  if   [ $((b+u)) -eq 0 ]; then echo vcf
+  elif [ $((v+u)) -eq 0 ]; then echo bcf
+  else echo "mixed(${b}bcf,${u}bad)"
+  fi
+}
+
 ## One chromosome of a GVCF → "<Σ DP×len>\t<Σ len>" (records without DP skipped)
 gvcf_chrom_sums() {   # $1 = GVCF   $2 = chrom (region filter; needs .tbi)
   bcftools query -r "$2" -f '%POS\t%INFO/END\t[%DP]\n' "$1" 2>/dev/null \
@@ -255,7 +281,7 @@ mosdepth_region_mean() {   # $1 = summary file   $2 = chrom | auto
 }
 
 ## First match of a glob pattern in dir (maxdepth 1), empty if none
-first_file() { find "$1" -maxdepth 1 -type f -name "$2" 2>/dev/null | sort | head -1; }
+first_file() { find -H "$1" -maxdepth 1 \( -type f -o -type l \) -name "$2" 2>/dev/null | sort | head -1; }
 
 ## Collect files matching one or more patterns into the global array FILES
 collect() {   # $1 = dir, $2.. = patterns
@@ -263,20 +289,21 @@ collect() {   # $1 = dir, $2.. = patterns
   FILES=()
   for p in "$@"; do
     while IFS= read -r f; do [ -n "$f" ] && FILES+=("$f"); done \
-      < <(find "$d" -maxdepth 1 -type f -name "$p" 2>/dev/null | sort)
+      < <(find -H "$d" -maxdepth 1 \( -type f -o -type l \) -name "$p" 2>/dev/null | sort)
   done
 }
 
 ## Does a dir look like a pipeline sample dir?
 is_sample_dir() {
   [ -d "$1/log" ] || [ -d "$1/chrom_gvcf" ] || \
-    find "$1" -maxdepth 1 -type f \( -name '*.f*q.gz' -o -name '*.bam' \) 2>/dev/null | grep -q .
+    find -H "$1" -maxdepth 1 \( -type f -o -type l \) \( -name '*.f*q.gz' -o -name '*.bam' \) 2>/dev/null | grep -q .
 }
 
 ## One TSV row for one sample dir
 summarize_sample() {
-  local d="$1" sample stage="S00" f
+  local d="$1" sample batch stage="S00" f
   sample=$(basename "$d")
+  batch=$(basename "$(dirname "$d")")   # same sample ID can exist in several batches
 
   # --- inputs (FASTQs, excluding S01's own repaired/singleton intermediates)
   collect "$d" '*.fastq.gz' '*.fq.gz'
@@ -308,12 +335,14 @@ summarize_sample() {
   local n_chr=0 c
   collect "$d/chrom_gvcf" '*.raw_vars.chr*.g.vcf.gz'
   local chr_gib; chr_gib=$(sum_gib ${FILES[@]+"${FILES[@]}"})
+  local chr_fmt; chr_fmt=$(container_summary ${FILES[@]+"${FILES[@]}"})
   for c in $CANON_CHROMS; do
     f=$(first_file "$d/chrom_gvcf" "*.raw_vars.${c}.g.vcf.gz")
     [ -n "$f" ] && [ -s "$f" ] && [ -s "${f}.tbi" ] && n_chr=$(( n_chr + 1 ))
   done
   local canon; canon=$(first_file "$d" '*.raw_variants.canon_chr.g.vcf.gz')
-  local canon_gib="NA"; [ -n "$canon" ] && canon_gib=$(sum_gib "$canon")
+  local canon_gib="NA" canon_fmt="NA"
+  [ -n "$canon" ] && { canon_gib=$(sum_gib "$canon"); canon_fmt=$(gvcf_container "$canon"); }
   [ "$n_chr" -eq "$CANON_N" ] && stage="S03"
   local s03; s03=$(s03_time "$d")
 
@@ -334,10 +363,10 @@ summarize_sample() {
   IFS=$'\t' read -r s03_n s03_max s03_sum <<< "$s03"
 
   printf '%s\t' \
-    "$sample" "$stage" "$fastq_gib" \
+    "$sample" "$batch" "$stage" "$fastq_gib" \
     "$n_sort" "$sort_gib" "$sstats" "$(to_hms "$s01_t")" "$s01_n" \
     "$bqsr_gib" "$dups" "$isize" "$depth" "$(to_hms "$s02_t")" "$s02_n" \
-    "${n_chr}/${CANON_N}" "$chr_gib" "$canon_gib" \
+    "${n_chr}/${CANON_N}" "$chr_gib" "$chr_fmt" "$canon_gib" "$canon_fmt" \
     "$(to_hms "$s03_max")" "$(to_hms "$s03_sum")" "$s03_n" \
     "$g_region" "$g_depth"
   printf '%s\n' "$g_ratio"
@@ -371,10 +400,10 @@ echo "[i]  Samples: ${#SAMPLE_DIRS[@]}"
 
 {
   printf '%s\t' \
-    sample stage fastq_gib \
+    sample batch stage fastq_gib \
     n_sort_bams sort_bam_gib raw_reads pct_mapped pct_proper_pair s01_time s01_runs \
     bqsr_bam_gib pct_dup median_insert mean_depth_auto mean_depth_chrX mean_depth_chrY mean_depth_chrM s02_time s02_runs \
-    chrom_gvcfs chrom_gvcf_gib canon_gvcf_gib s03_time_max s03_time_sum s03_runs \
+    chrom_gvcfs chrom_gvcf_gib chrom_gvcf_fmt canon_gvcf_gib canon_gvcf_fmt s03_time_max s03_time_sum s03_runs \
     gvcf_depth_region gvcf_depth
   printf '%s\n' gvcf_vs_mosdepth
   for d in "${SAMPLE_DIRS[@]}"; do
@@ -385,7 +414,7 @@ echo "[i]  Samples: ${#SAMPLE_DIRS[@]}"
 
 mv "${OUT_TSV}.tmp" "$OUT_TSV"
 echo "[>]  $OUT_TSV"
-echo "[i]  Stage counts: $(cut -f2 "$OUT_TSV" | tail -n +2 | sort | uniq -c | awk '{printf "%s=%s ", $2, $1}')"
+echo "[i]  Stage counts: $(cut -f3 "$OUT_TSV" | tail -n +2 | sort | uniq -c | awk '{printf "%s=%s ", $2, $1}')"
 
 # <\MAIN> ---------------------------------------------------------------------
 
