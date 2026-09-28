@@ -285,7 +285,7 @@ if [[ "$USE_SCRATCH" == true ]]; then
 
   WRAP_S02="$(build_scratch_wrap "$S02" "sort_bams" \
     "*.rmdup.mqfilt.bqsr.bam *.rmdup.mqfilt.bqsr.bam.bai \
-     *.bqsr_table.txt *-dups.txt *.mosdepth.* *.metrics.txt *.pdf")"
+     *.bqsr_table.txt *-dups.txt *.mosdepth.* *_metrics.txt *.pdf")"
 
   # S03 whole-genome: keep only the canon_chr GVCF + per-chrom split
   # (chrom_gvcf/ is the Step 04 input). all-contigs raw_variants.g.vcf.gz is NOT
