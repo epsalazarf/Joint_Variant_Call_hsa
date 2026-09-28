@@ -6,8 +6,8 @@
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-04-17
-# Version     : 1.0
-# Usage       : 04_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
+# Version     : 1.1
+# Usage       : 02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
 # Source      : GATK4 Best Practices — https://gatk.broadinstitute.org/hc/en-us/articles/360035535932
 # =============================================================================
 
@@ -33,12 +33,37 @@ echo "[i]  Checking input files..."
 if [ -f "$BAM_FILE" ]; then
   echo "[<]  $BAM_FILE"
   echo "[i]  Output: ${OUTPUT_PATH}"
-  BAM_prefix=${BAM_FILE%%.*bam}
-  FINAL_FILE="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table_recal.txt"
+  BAM_name=$(basename "$BAM_FILE")
+  BAM_prefix=${BAM_name%%.*bam}
 else
   echo "[X]  CANCELLED. File not found: ${BAM_FILE}"
   exit 1
 fi
+
+# BQSR tables: S02 (v1.2+) names them <SAMPLE>.rmdup.mqfilt.bqsr_table[_recal].txt;
+# older S02 outputs used <SAMPLE>.bqsr_table[_recal].txt. Prefer the new names,
+# fall back to the legacy ones if only those exist.
+TABLE_PRE="${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table.txt"
+TABLE_PRE_LEGACY="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table.txt"
+TABLE_POST="${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table_recal.txt"
+TABLE_POST_LEGACY="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table_recal.txt"
+
+if [ ! -f "$TABLE_PRE" ] && [ -f "$TABLE_PRE_LEGACY" ]; then
+  echo "[i]  Using legacy pre-BQSR table name: $TABLE_PRE_LEGACY"
+  TABLE_PRE="$TABLE_PRE_LEGACY"
+fi
+if [ ! -s "$TABLE_POST" ] && [ -s "$TABLE_POST_LEGACY" ]; then
+  echo "[i]  Using legacy post-BQSR table name: $TABLE_POST_LEGACY"
+  TABLE_POST="$TABLE_POST_LEGACY"
+fi
+FINAL_FILE="$TABLE_POST"
+
+# Guard: pre-BQSR table (checked before the costly Step 1)
+[ -f "$TABLE_PRE" ] || {
+  echo "[X]  CANCELLED. Missing pre-BQSR table (produced by Step 02): ${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table.txt"
+  exit 1
+}
+echo "[<]  $TABLE_PRE"
 
 # Options
 BQSR_COV=true   # Run Step 2: AnalyzeCovariates (only reason to run this script)
@@ -98,7 +123,7 @@ echo "[i]    Variants: ${ref_vars}"
 step1_post_bqsr_baserecalibrator() {
   local step_name="Step 1: Post-BQSR BaseRecalibrator"
   local infile="$BAM_FILE"
-  local outfile="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table_recal.txt"
+  local outfile="$TABLE_POST"
   local step_timestamp=$(date +%s)
 
   echo
@@ -126,8 +151,8 @@ step1_post_bqsr_baserecalibrator() {
 ## Step 2: AnalyzeCovariates (optional)
 step2_analyze_covariates() {
   local step_name="Step 2: Analyze Covariates"
-  local table="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table.txt"
-  local table_recal="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table_recal.txt"
+  local table="$TABLE_PRE"
+  local table_recal="$TABLE_POST"
   local cov_report="${OUTPUT_PATH}/${BAM_prefix}.bqsr_covariates"
   local step_timestamp=$(date +%s)
 
@@ -145,8 +170,11 @@ step2_analyze_covariates() {
     --before-report-file "$table" \
     --after-report-file "$table_recal" \
     --verbosity ERROR \
-    --intermediate-csv-file "${cov_report}.csv" \
-    --plots-report-file "${cov_report}.pdf"
+    --intermediate-csv-file "${cov_report}.tmp.csv" \
+    --plots-report-file "${cov_report}.tmp.pdf"
+
+  mv "${cov_report}.tmp.csv" "${cov_report}.csv"
+  mv "${cov_report}.tmp.pdf" "${cov_report}.pdf"
 
   [ -s "${cov_report}.pdf" ] || { echo "[X]  CANCELLED: $step_name failed, output missing: ${cov_report}.pdf"; exit 1; }
   echo "[>]  ${cov_report}.pdf"
