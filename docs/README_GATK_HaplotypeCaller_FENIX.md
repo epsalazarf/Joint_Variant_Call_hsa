@@ -1,90 +1,112 @@
-# GATK HaplotypeCaller [FENIX]
+# GATK HaplotypeCaller [FENIX] — Step 03a
 
-**Author:** Pavel Salazar-Fernandez et al.  
-**Source:** [GATK4 Best Practices – Germline Short Variant Discovery](https://gatk.broadinstitute.org/hc/en-us/articles/360035535932)  
-**Version:** FENIX pipeline module  
+**Script:** `bin/03_gatk_haplotype_caller.sh` (v1.2)
+**Author:** Pavel Salazar-Fernandez et al.
+**Source:** [GATK4 Best Practices – Germline Short Variant Discovery](https://gatk.broadinstitute.org/hc/en-us/articles/360035535932)
 
 ---
 
 ## Overview
 
-This script automates **GATK4 HaplotypeCaller** to perform germline variant calling (SNPs and Indels) from an analysis-ready BAM file.  
-It is designed for reproducible use in both **local** and **HPC (FENIX)** environments.
+Per-sample germline calling (SNPs + indels) with **GATK4 HaplotypeCaller in GVCF mode** (`-ERC GVCF`, dbSNP annotation) from the analysis-ready BAM produced by Step 02. Its main product is `chrom_gvcf/`: one GVCF per canonical chromosome, which Step 04 (GenomicsDBImport) reads.
+
+The script has two modes:
+
+| Mode | Call | Use |
+|------|------|-----|
+| **scatter** (one chromosome) | `03_gatk_haplotype_caller.sh <bam> <out> chrN` | Default in the launcher: 25 of these run as a SLURM array |
+| **whole-genome** | `03_gatk_haplotype_caller.sh <bam> <out>` | One long job (~15 h), then split by chromosome |
+
+`chrN` is one of `chr1`..`chr22`, `chrX`, `chrY`, `chrM`. `chrM` is called with `--sample-ploidy 1`.
 
 ---
 
 ## Usage
 
+### Recommended — via the launcher
+
 ```bash
-bash 03_gatk_variant_calling.sh [Mapped_BAM] [Output_Path]
+bash bin/PIPELINE.single_sample_01-03.sh /path/to/SAMPLE_ID/
 ```
 
-**Example:**
+With `SCATTER_S03=true` (default), Step 03 is submitted as a **25-task array** (2 CPU / 13 GB / 48 h each, `ARRAY_CONC=6` at a time). Once every chromosome succeeds, a **gather** job concatenates them into the whole-genome `canon_chr` GVCF, which is kept for archiving only. Per-sample wall time is about 2 h (the chr1 task). A failed task only costs that chromosome, and relaunching resubmits only the chromosomes whose GVCF + `.tbi` is missing.
+
+### Manual
+
 ```bash
-bash 03_gatk_variant_calling.sh sample123.sorted.bam /path/to/output/
+# one chromosome → <out>/chrom_gvcf/SAMPLE.raw_vars.chr7.g.vcf.gz
+bash bin/03_gatk_haplotype_caller.sh SAMPLE.rmdup.mqfilt.bqsr.bam <out> chr7
+
+# whole genome
+bash bin/03_gatk_haplotype_caller.sh SAMPLE.rmdup.mqfilt.bqsr.bam <out>
 ```
 
-**Output:**  
-`sample123.raw_variants.canon_sort.g.vcf.gz`
+### Legacy batch
 
----
-
-## Workflow Summary
-
-1. **Setup** – Validates inputs, parses config (`config/config.yaml`), detects local or SSH environment.  
-2. **Variant Calling** – Runs `gatk HaplotypeCaller` to produce a raw GVCF.  
-3. **Indexing** – Indexes output using `bcftools index`.  
-4. **Canonical Filtering** – Keeps only canonical chromosomes (1–22, X, Y, M).  
-5. **Finisher** – Validates final output and reports runtime.
-
----
-
-## Limitations
-
-- **Single BAM per run:**  
-  This script currently accepts **only one BAM file per sample**.  
-  If a sample has multiple BAMs (e.g., from multiple lanes or libraries), **merge them before running** this script.
-
-- **Future feature:**  
-  Upcoming versions will support **automatic merging of multiple BAMs** per sample before variant calling.
-
----
-
-## Dependencies
-
-- `GATK >= 4.0`  
-- `bcftools`  
-- `awk`, `bash >= 4.0`  
-- Optional: `module` environment (for remote/HPC use)
-
----
-
-## Configuration
-
-Reference files and paths are specified in:
+```bash
+bash bin/supp/HAPCALL.seq_batch-slurmer.sh bin/03_gatk_haplotype_caller.sh /path/to/bqsr/bams/
 ```
-config/config.yaml
-```
-Separate configurations for **local** and **remote** environments are supported.
+
+One whole-genome job per sample (4 CPU / 32 GB). No scatter, no scratch, no verified copy-back.
+
+---
+
+## Workflow
+
+**Scatter mode**
+1. HaplotypeCaller `--intervals chrN` → hidden `.tmp` GVCF + index in `chrom_gvcf/`
+2. Rename to the final name only on success (skip if the final GVCF + `.tbi` already exist)
+
+**Whole-genome mode**
+1. HaplotypeCaller → `SAMPLE.raw_variants.g.vcf.gz`
+2. Index (`bcftools index --tbi`)
+3. Keep canonical chromosomes → `SAMPLE.raw_variants.canon_chr.g.vcf.gz`
+4. Split by chromosome → `chrom_gvcf/SAMPLE.raw_vars.<CHR>.g.vcf.gz`
+
+The sample prefix is the BAM filename up to the first `.` (so `SAMPLE.rmdup.mqfilt.bqsr.bam` → `SAMPLE`).
+
+---
+
+## Resources
+
+| Mode | HC heap | pair-HMM threads |
+|------|---------|------------------|
+| scatter (FENIX) | `-Xms2G -Xmx10G` | 2 |
+| whole-genome (FENIX) | `-Xms20G -Xmx20G` | 4 |
+| local | 8G / 12G max | 2 / 4 |
+
+The small initial heap in scatter mode stops short tasks (chrY, chrM) from reserving memory they never use, which makes them easier for SLURM to place.
 
 ---
 
 ## Output
 
-- Final GVCF: `sample.raw_variants.canon_sort.g.vcf.gz`  
-- Indexed with `.tbi`  
-- Ready for joint genotyping or downstream filtering.
+| File | Description |
+|------|-------------|
+| `chrom_gvcf/SAMPLE.raw_vars.<CHR>.g.vcf.gz` + `.tbi` | Per-chromosome GVCFs — **Step 04 input** |
+| `SAMPLE.raw_variants.canon_chr.g.vcf.gz` + `.tbi` | Whole-genome canonical GVCF (gather / whole-genome mode) — archival |
+| `SAMPLE.raw_variants.g.vcf.gz` | All-contigs GVCF — whole-genome mode only; not copied back from scratch by the launcher |
+
+To check the depth of finished GVCFs, run `bin/supp/SUMMARY.sample_stats_S01-S03.sh <batch> --gvcf-depth`.
 
 ---
 
-## Quick Troubleshooting
+## Dependencies
+
+- `gatk` ≥ 4.x (on FENIX: `oracle-java/25.0.2` + `gatk` modules, loaded by the script)
+- `bcftools`, `samtools`
+- `ref_gnm` and `ref_vars` in `config/config.yaml`
+- bash ≥ 4 (`EPOCHSECONDS`)
+
+---
+
+## Troubleshooting
 
 | Issue | Cause | Solution |
-|-------|--------|-----------|
-| `<ERROR> File not found` | Incorrect BAM or reference path | Check file paths and ensure symbolic links are valid |
-| `<ERROR> Missing reference paths` | Missing or misconfigured YAML entries | Verify `ref_gnm` and `ref_vars` in `config/config.yaml` |
-| GATK command not found | Module not loaded or PATH not set | Load required modules (`module load gatk`, `bcftools`) |
-| Script exits early | Wrong arguments | Run as `bash 03_gatk_variant_calling.sh [BAM] [OUTPUT_PATH]` |
-| Output missing or empty | Step failed silently | Re-run with verbose mode and check disk space |
-
----
+|-------|-------|----------|
+| `CANCELLED. File not found` | Wrong BAM path | Check the path / symlink |
+| `Not a canonical chromosome` | Bad 3rd argument | Use `chr1`..`chr22`, `chrX`, `chrY`, `chrM` |
+| `Missing reference paths` | Config keys empty | Set `ref_gnm` / `ref_vars` for the environment |
+| Array task dies instantly with `scratch unavailable on <node>` | Broken scratch mount on that node | Add the node to `sbatch_exclude` in the config, then relaunch |
+| JVM `SIGSEGV` on one node | Bad hardware | Exclude the node (`sbatch_exclude`) and relaunch; only failed chromosomes rerun |
+| `chrom_gvcfs` < 25/25 in the summary table | Some array tasks failed | Check `log/SAMPLE-S03-*_<task>.log`, then relaunch the sample |

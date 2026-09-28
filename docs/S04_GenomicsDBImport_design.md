@@ -229,10 +229,10 @@ warns when the output dir is not setgid.
 
 ## Known limitations / follow-ups
 
-- **No SLURM launcher yet.** `GENDBI.seq_batch-slurmer.sh` (one job per
-  chromosome, with the same `autosomes` / `all` gate) is deferred until S04 is
-  validated on FENIX.
-- **Not in `run_pipeline.sh` / `PIPELINE.single_sample.sh`.** S04 is
+- **No generic SLURM launcher yet.** `bin/supp/JAGUAR.S04_run_all_chroms.sh`
+  submits all 25 chromosomes in parallel (arrays by size class) for JAGUAR, with
+  hard-coded paths. It should be generalised into `GENDBI.seq_batch-slurmer.sh`.
+- **Not in `run_pipeline.sh` / `PIPELINE.single_sample_01-03.sh`.** S04 is
   cohort-level, not single-sample; it needs its own launcher.
 - **One interval == one whole chromosome.** Fine for now. Very large cohorts
   may want finer scatter (e.g. `chr1:1-125000000`) — revisit if chr1/chr2
@@ -245,7 +245,7 @@ warns when the output dir is not setgid.
 
 ---
 
-## First FENIX test (pending): JAGUAR cohort, chr22
+## First FENIX test (done, 2026-09-01): JAGUAR cohort, chr22
 
 See `test/jaguar/`. 93 samples, 3 waves of 31 (create + update + update),
 escalating resources per wave. Includes one deliberately-truncated GVCF
