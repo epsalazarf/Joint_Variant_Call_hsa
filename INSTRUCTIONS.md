@@ -243,7 +243,7 @@ Files are named after the sample (`SAMPLE.rmdup.*`), not the input BAM (`SAMPLE.
 
 Generates before/after BQSR covariate plots without re-running the full Step 02. Use when Step 02 was run with `BQSR_EVAL=false`.
 
-**Prerequisite:** the pre-BQSR table `SAMPLE.rmdup.mqfilt.bqsr_table.txt` (written by Step 02) in the output directory. Outputs from older Step 02 versions named `SAMPLE.bqsr_table.txt` are picked up automatically.
+**Prerequisite:** the pre-BQSR table `SAMPLE.rmdup.mqfilt.bqsr_table.txt` (written by Step 02) in the output directory. The table is looked up next to the BAM as `<BAM name minus .bam>_table.txt`, so legacy runs (`L46_1.sorted.rmdup.mqfilt.bqsr_table.txt`) and older `SAMPLE.bqsr_table.txt` outputs are picked up automatically.
 
 ```bash
 bash bin/supp/02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]

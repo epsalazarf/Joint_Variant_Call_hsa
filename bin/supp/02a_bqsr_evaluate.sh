@@ -40,27 +40,26 @@ else
   exit 1
 fi
 
-# BQSR tables: S02 (v1.2+) names them <SAMPLE>.rmdup.mqfilt.bqsr_table[_recal].txt;
-# older S02 outputs used <SAMPLE>.bqsr_table[_recal].txt. Prefer the new names,
-# fall back to the legacy ones if only those exist.
-TABLE_PRE="${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table.txt"
-TABLE_PRE_LEGACY="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table.txt"
-TABLE_POST="${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table_recal.txt"
-TABLE_POST_LEGACY="${OUTPUT_PATH}/${BAM_prefix}.bqsr_table_recal.txt"
-
-if [ ! -f "$TABLE_PRE" ] && [ -f "$TABLE_PRE_LEGACY" ]; then
-  echo "[i]  Using legacy pre-BQSR table name: $TABLE_PRE_LEGACY"
-  TABLE_PRE="$TABLE_PRE_LEGACY"
-fi
-if [ ! -s "$TABLE_POST" ] && [ -s "$TABLE_POST_LEGACY" ]; then
-  echo "[i]  Using legacy post-BQSR table name: $TABLE_POST_LEGACY"
-  TABLE_POST="$TABLE_POST_LEGACY"
-fi
+# BQSR tables sit next to the BAM as <BAM name minus .bam>_table[_recal].txt —
+# true for current S02 (SAMPLE.rmdup.mqfilt.bqsr_table.txt) and for legacy runs
+# (L46_1.sorted.rmdup.mqfilt.bqsr_table.txt). Older fallbacks tried after that.
+BAM_stem=${BAM_name%.bam}
+pick_table() {   # $1 = suffix (_table | _table_recal); prints first existing, else the default
+  local c
+  for c in "${OUTPUT_PATH}/${BAM_stem}${1}.txt" \
+           "${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr${1}.txt" \
+           "${OUTPUT_PATH}/${BAM_prefix}.bqsr${1}.txt"; do
+    [ -s "$c" ] && { echo "$c"; return; }
+  done
+  echo "${OUTPUT_PATH}/${BAM_stem}${1}.txt"
+}
+TABLE_PRE=$(pick_table _table)
+TABLE_POST=$(pick_table _table_recal)
 FINAL_FILE="$TABLE_POST"
 
 # Guard: pre-BQSR table (checked before the costly Step 1)
-[ -f "$TABLE_PRE" ] || {
-  echo "[X]  CANCELLED. Missing pre-BQSR table (produced by Step 02): ${OUTPUT_PATH}/${BAM_prefix}.rmdup.mqfilt.bqsr_table.txt"
+[ -s "$TABLE_PRE" ] || {
+  echo "[X]  CANCELLED. Missing pre-BQSR table (produced by Step 02): $TABLE_PRE"
   exit 1
 }
 echo "[<]  $TABLE_PRE"
