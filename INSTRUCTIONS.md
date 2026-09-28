@@ -10,24 +10,32 @@ Step-by-step usage guide for the Joint Variant Calling Pipeline.
 
 ```
 bin/
+├── PIPELINE.single_sample_01-03.sh # Recommended: S01→S02→S03 chained SLURM launcher (one sample)
 ├── 01_bwa_map_fastq_reads.sh       # Step 01 — FASTQ alignment
 ├── 02_gatk_bam_qc_workflow.sh      # Step 02 — BAM QC + BQSR
-├── 03_gatk_haplotype_caller.sh     # Step 03a — HaplotypeCaller (standard coverage)
-├── 03_glimpse2_imputation.sh       # Step 03b — GLIMPSE2 imputation (low-coverage)
-├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (beta)
+├── 03_gatk_haplotype_caller.sh     # Step 03a — HaplotypeCaller (whole-genome or one chromosome)
+├── 03_glimpse2_imputation.sh       # Step 03b — GLIMPSE2 imputation (low-coverage, paused)
+├── 04_gatk_GenomicsDB_import.sh    # Step 04 — GenomicsDB import (cohort-level)
 ├── 05_gatk_GenotypeGVCFs.sh        # Step 05 — Joint genotyping (stub)
 ├── 06_gatk_vqsr.sh                 # Step 06 — VQSR filtering (stub)
 └── supp/
+    ├── BATCH.submit_S01-S03.sh             # Run the launcher on every sample of a batch dir
+    ├── SUMMARY.sample_stats_S01-S03.sh     # Per-sample TSV: stage, sizes, times, QC, depth
     ├── 00_scan_fastq_pairs.sh              # Inspect FASTQ pairs before mapping
     ├── 00_glimpse2_ref_panel_prep.sh       # Prepare GLIMPSE2 binary reference panel
     ├── 02a_bqsr_evaluate.sh                # Retroactive BQSR covariate plots
     ├── 03-s4_gvcf_chrom_split.sh           # Split GVCFs by chromosome
-    ├── BWAMAP.seq_batch-slurmer.sh         # Batch SLURM launcher for Step 01
-    ├── BAMQC.seq_batch-slurmer.sh          # Batch SLURM launcher for Step 02
-    ├── HAPCALL.seq_batch-slurmer.sh        # Batch SLURM launcher for Step 03a
-    ├── PIPELINE.single_sample.sh           # End-to-end single-sample launcher
+    ├── BWAMAP.seq_batch-slurmer.sh         # Per-step batch launcher for Step 01
+    ├── BAMQC.seq_batch-slurmer.sh          # Per-step batch launcher for Step 02
+    ├── HAPCALL.seq_batch-slurmer.sh        # Per-step batch launcher for Step 03a (whole-genome, legacy)
+    ├── S02_scratch_benchmark.sh            # Scratch-vs-NFS benchmark for Step 02
+    ├── JAGUAR.S04_run_all_chroms.sh        # One-shot: JAGUAR full-cohort Step 04, all chromosomes
+    ├── LUPUS25.setup_and_submit_S01-S03.sh # One-shot: stage + submit pending Lupus2025 samples
+    ├── SLEmx_legacy.submit_S03.sh          # One-shot: S03 for the legacy SLE cohort (mbravog)
     └── run_pipeline.sh                     # Full pipeline wrapper (stub)
 ```
+
+The `JAGUAR.*`, `LUPUS25.*` and `SLEmx_legacy.*` scripts are cohort-specific one-offs with hard-coded paths. Keep them for reference, and copy one as a template rather than reusing it on another cohort.
 
 ---
 
@@ -36,6 +44,44 @@ bin/
 1. **Configure paths** in `config/config.yaml` — set `ref_gnm`, `ref_vars`, and any other keys for your environment (`remote:` for FENIX, `local:` for workstation).
 2. **Load modules** (FENIX only): scripts call `module load` automatically based on the `modules` key in the config.
 3. All scripts must be run from the repo root or with explicit paths.
+4. On FENIX, keep outputs on group storage (`/mnt/data/...`), never under `$HOME` (hard 5 GB quota).
+
+---
+
+## Recommended: One-Command Launchers (Steps 01→03)
+
+For new samples, use the launchers instead of running the steps by hand. They run everything in the sample directory, so no hand-off between steps is needed.
+
+```bash
+# One sample (dir named after the sample ID, holding its FASTQs)
+bash bin/PIPELINE.single_sample_01-03.sh /path/to/SAMPLE_ID/
+
+# Every sample subdirectory of a batch
+bash bin/supp/BATCH.submit_S01-S03.sh /path/to/BatchNN/
+```
+
+| Behaviour | Details |
+|-----------|---------|
+| Chaining | S01 → S02 → S03 via `--dependency=afterok` |
+| Resume | A step is skipped when its final output exists (S01 `*.sort.bam`/`*.sorted.bam`, S02 `*.rmdup.mqfilt.bqsr.bam`, S03 all 25 `chrom_gvcf/` + `canon_chr` GVCF). FASTQs are only required if S01 still has to run. |
+| S03 scatter | `SCATTER_S03=true` (default): 25-task array (one chromosome each, `%ARRAY_CONC` concurrent, default 6), then a gather job that builds the `canon_chr` GVCF. Resubmitting re-runs only the missing chromosomes. |
+| Scratch | `USE_SCRATCH=true` (default) — see [Scratch Storage](#scratch-storage-scratch--what-it-is-and-isnt-for) |
+| Guards | Aborts if the output FS has < `min_free_gb` free; `sbatch_exclude` nodes are avoided (both in `config/config.yaml`) |
+| Logs | `SAMPLE_ID/log/SAMPLE-S0N-<epoch>.<jobid>.log` (S03 array: `SAMPLE-S03-<epoch>.<arrayjob>_<task>.log`, gather: `SAMPLE-S03g-...`) |
+
+Resources requested per job:
+
+| Job | CPUs | Memory | Walltime |
+|-----|------|--------|----------|
+| S01 | 8 | 20 GB | 48 h |
+| S02 | 4 | 28 GB | 48 h |
+| S03 per chromosome (scatter) | 2 | 13 GB | 48 h |
+| S03 gather | 2 | 8 GB | 24 h |
+| S03 whole-genome (`SCATTER_S03=false`) | 4 | 32 GB | 48 h |
+
+Heaps are pinned inside the scripts (e.g. MarkDuplicates `-Xmx16g`, BQSR `-Xmx8g`, repair.sh `-Xmx8g`). Tools otherwise size their heap to the node's RAM rather than the SLURM limit.
+
+**Re-running a step on purpose:** "resume" never redoes finished work. To force a step, remove its final output from the sample dir first, then relaunch.
 
 ---
 
@@ -173,7 +219,12 @@ squeue -u $USER | grep BAMQC
 | `SAMPLE-dups.txt` | Duplicate metrics |
 | `SAMPLE.rmdup.mqfilt.bam` | MQ ≥ 30 filtered (intermediate, if `MQ_FILTER=true`) |
 | `SAMPLE.rmdup.mqfilt.bqsr.bam` | **Final analysis-ready BAM** |
-| `SAMPLE.rmb.mosdepth.*` | Coverage summary |
+| `SAMPLE.rmdup.mqfilt.bqsr_table.txt` | BQSR recalibration table |
+| `SAMPLE.rmb.mosdepth.*` | Coverage summary (`--fast-mode`, no per-base) |
+| `SAMPLE.alignment_metrics.txt` | Picard alignment summary (if `RUN_METRICS=true`) |
+| `SAMPLE.insert_size_metrics.txt` + `SAMPLE.insert_size_histogram.pdf` | Insert-size metrics (if `RUN_METRICS=true`) |
+
+Files are named after the sample (`SAMPLE.rmdup.*`), not the input BAM (`SAMPLE.sort.rmdup.*` before v1.2). Output from before v1.2 isn't recognised by the skip logic; rename those files or rerun.
 
 ### Toggles (edit inside the script)
 
@@ -181,8 +232,9 @@ squeue -u $USER | grep BAMQC
 |----------|---------|--------|
 | `HOUSEKEEP` | `true` | Remove intermediate BAMs on success |
 | `MQ_FILTER` | `false` | Apply MQ ≥ 30 filter (originally for aDNA) |
-| `RUN_METRICS` | `false` | Collect alignment + insert-size metrics |
+| `RUN_METRICS` | `true` | Collect alignment + insert-size metrics |
 | `BQSR_EVAL` | `false` | Run post-BQSR evaluation inline (use 02a instead) |
+| `BQSR_COV` | `true` | AnalyzeCovariates plots (forced off on FENIX; needs `BQSR_EVAL=true`) |
 | `REMOVE_DUPS` | `false` | Remove duplicates instead of marking |
 
 ---
@@ -191,7 +243,7 @@ squeue -u $USER | grep BAMQC
 
 Generates before/after BQSR covariate plots without re-running the full Step 02. Use when Step 02 was run with `BQSR_EVAL=false`.
 
-**Prerequisite:** `SAMPLE.bqsr_table.txt` must exist in the output directory (produced by Step 02).
+**Prerequisite:** the pre-BQSR table `SAMPLE.rmdup.mqfilt.bqsr_table.txt` (written by Step 02) in the output directory. Outputs from older Step 02 versions named `SAMPLE.bqsr_table.txt` are picked up automatically.
 
 ```bash
 bash bin/supp/02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
@@ -201,7 +253,7 @@ bash bin/supp/02a_bqsr_evaluate.sh <sample.rmdup.mqfilt.bqsr.bam> [output_path]
 
 | File | Description |
 |------|-------------|
-| `SAMPLE.bqsr_table_recal.txt` | Post-BQSR recalibration table |
+| `SAMPLE.rmdup.mqfilt.bqsr_table_recal.txt` | Post-BQSR recalibration table (reused if Step 02 already wrote it) |
 | `SAMPLE.bqsr_covariates.pdf` | Before/after covariate plots |
 | `SAMPLE.bqsr_covariates.csv` | Intermediate covariate data |
 
@@ -283,8 +335,11 @@ Consolidates the per-chromosome GVCFs from Step 03a into GenomicsDB workspaces,
 **one per chromosome**, for joint genotyping. This is a cohort step: run it once
 for the whole set of samples you want genotyped together.
 
-> **Beta** — local tests pass; not yet validated on FENIX with real data.
-> See [docs/S04_GenomicsDBImport_design.md](docs/S04_GenomicsDBImport_design.md).
+> **Validated on FENIX** — JAGUAR chr22, 93 samples, 3-wave incremental import.
+> Design notes, resourcing and known limitations:
+> [docs/S04_GenomicsDBImport_design.md](docs/S04_GenomicsDBImport_design.md).
+> Test harness (any chromosome / cohort): [test/jaguar/README.md](test/jaguar/README.md).
+> Coordinate with the maintainer before running it; it is a cohort-level step, run once after **all** samples finish Step 03.
 
 ### 1. Build the sample map
 
@@ -322,8 +377,12 @@ bash bin/04_gatk_GenomicsDB_import.sh cohort.sample_map.tsv <output_path> chr22 
 | `chrom` | `chr1`..`chr22` \| `chrX` \| `chrY` \| `chrM` \| `autosomes` \| `all` |
 | `action` | `create` (default) \| `update` |
 
-`autosomes` / `all` process every chromosome **serially in one process** — fine
-for tests and small cohorts. A per-chromosome SLURM launcher will come later.
+`autosomes` / `all` process every chromosome **serially in one process**. That's fine
+for tests and small cohorts, but a full cohort takes days that way. To run
+all chromosomes in parallel, submit one SLURM job per chromosome.
+`bin/supp/JAGUAR.S04_run_all_chroms.sh` does this for JAGUAR (arrays by
+chromosome-size class, `--dry-run` / `--status` modes). Copy it for a new
+cohort; a generic launcher is not built yet.
 
 ### 3. Adding samples later (waves)
 
@@ -333,6 +392,8 @@ bash bin/04_gatk_GenomicsDB_import.sh wave1.sample_map.tsv <out> chr22 create
 # later wave — only the NEW samples in this map
 bash bin/04_gatk_GenomicsDB_import.sh wave2.sample_map.tsv <out> chr22 update
 ```
+
+Never consolidate on `update`: it took 13.5 h on chr1 in testing. `--consolidate` is opt-in and off by default.
 
 ### Output
 
@@ -347,7 +408,7 @@ success.
 
 ## Steps 05–06 — Joint Genotyping and Filtering (stubs)
 
-Not yet implemented; on hold until Step 04 is validated on FENIX.
+Not yet implemented; on hold for now (Step 04 is validated, so this is the next step to build).
 
 | Step | Script | Purpose |
 |------|--------|---------|
@@ -361,11 +422,14 @@ Do not use these for production runs. Watch the pipeline overview table in
 
 ## Scratch Storage (`/scratch`) — what it is and isn't for
 
-The single-sample launcher (`bin/supp/PIPELINE.single_sample.sh`) has a `USE_SCRATCH` toggle (default `true` on FENIX). When enabled it:
+The single-sample launcher (`bin/PIPELINE.single_sample_01-03.sh`) has a `USE_SCRATCH` toggle (default `true` on FENIX). When enabled it:
 
 - reads **inputs directly from NFS** (`/mnt/data`),
-- points **`TMPDIR` and all intermediate/output files at `/scratch`**,
-- copies only the **final outputs back** to the sample directory, then wipes scratch.
+- points **`TMPDIR` and all intermediate/output files at `/scratch`**, under `<scratch_base>/<primary group of the running user>/$USER/job_<jobid>`. That works for group members and guests alike, whatever node the job lands on.
+- copies only the **final outputs back** to the sample directory, **verifying each one** (size match, then `samtools quickcheck` for BAMs or `gzip -t` for GVCFs), then wipes scratch,
+- **preserves** scratch if any check fails, so the data can be recovered; the log prints the path. The scratch dir is also removed if the job is killed (SIGTERM/HUP).
+
+If a node's scratch mount is broken, jobs on it fail immediately with `scratch unavailable on <node>`. Add that node to `sbatch_exclude` in `config/config.yaml` and resubmit.
 
 ### Benchmark finding (Sept 2026)
 
@@ -401,19 +465,57 @@ To reproduce or extend the benchmark: `bin/supp/S02_scratch_benchmark.sh [sample
 ## Monitoring Jobs
 
 ```bash
-squeue -u $USER              # all your jobs
-squeue -u $USER | grep BWAMAP
-squeue -u $USER | grep BAMQC
-squeue -u $USER | grep HAPCALL
+squeue -u $USER                  # all your jobs
+squeue -u $USER | grep SAMPLE_ID # one sample's chain (launcher job names: SAMPLE-S01-..., SAMPLE-S03g-...)
+squeue -u $USER | grep -E 'BWAMAP|BAMQC|HAPCALL'   # per-step slurmers
 ```
 
 ## Logs
 
-Each script writes a timestamped log to `log/`. Check there first if a job fails.
+- Launcher jobs: `SAMPLE_ID/log/` (see [the launcher table](#recommended-one-command-launchers-steps-0103)).
+- Per-step slurmers: `%x.%j.log` in the sample/output dir (BWAMAP, BAMQC) or the submission dir (HAPCALL).
+
+Each step script prints `[*]` step headers, `[&]  Step time:` lines, a final `[&]  Total time:`, and `completed successfully!` on success. Search a log for `[X]` or `<ERROR>` first.
+
+---
+
+## Per-sample Summary Table
+
+Scans the outputs and logs of Steps 01–03 and writes one TSV row per sample. It only reads files, so it's safe to run while jobs are still going. It follows symlinked files and folders (legacy BAMs, staged FASTQs, read-only batches from other users) and understands both current and legacy log wording.
+
+```bash
+bash bin/supp/SUMMARY.sample_stats_S01-S03.sh <batch_or_sample_dir> [more_dirs...] [-o out.tsv]
+    [--gvcf-depth[=fast|full]] [-j N]
+```
+
+Default output: `./<first_dir>.S01-S03_summary.<date>.tsv`.
+
+| Columns | Source |
+|---------|--------|
+| `batch` | parent folder — tells apart the same sample ID in several batches |
+| `stage` | furthest step whose final output exists (S00–S03) |
+| `fastq_gib`, `sort_bam_gib`, `bqsr_bam_gib`, `chrom_gvcf_gib`, `canon_gvcf_gib` | file sizes |
+| `raw_reads`, `pct_mapped`, `pct_proper_pair` | `*.sort.stats.txt` (samtools stats, summed over read groups) |
+| `pct_dup` | `*-dups.txt` (Picard, pooled across libraries) |
+| `median_insert` | `*.insert_size_metrics.txt` |
+| `mean_depth_auto`, `mean_depth_chrX/chrY/chrM` | `*.mosdepth.summary.txt` (autosomes = Σbases / Σlength over chr1–22) |
+| `s01_time`, `s02_time` | `Total time` of the most recent **successful** log for that step |
+| `s03_time_max`, `s03_time_sum` | scatter: slowest chromosome (≈ wall time) and total compute |
+| `*_runs` | logs found per step (> 1 = failed attempts or resumes) |
+| `chrom_gvcfs` | `n/25` per-chromosome GVCFs present with index |
+| `chrom_gvcf_fmt`, `canon_gvcf_fmt` | real container: `vcf`, `bcf` or `mixed(...)`. Legacy S03 ran `bcftools -O b` with a `.g.vcf.gz` name, and GATK can't read bcftools BCF, so anything other than `vcf` must be fixed before Step 04 |
+| `gvcf_depth_region`, `gvcf_depth`, `gvcf_vs_mosdepth` | only with `--gvcf-depth` (see below) |
+
+**`--gvcf-depth`**: re-derives mean depth from the GVCFs as a length-weighted mean of `FORMAT/DP`. Each reference block counts for the bases it spans (ref-block DP is GATK's block median), and each variant site counts once. That makes it valid on GVCFs, unlike `bcftools stats`, whose DP histogram counts a 5 kb block the same as one SNP.
+- `fast` (default when you pass only `--gvcf-depth`): chr20 only, about a minute per sample. Use it as a quick check on finished samples.
+- `full`: chr1–22, `-j` chromosomes in parallel (default 4). Use it for the final report.
+- `gvcf_vs_mosdepth` compares against mosdepth over the **same** region. HaplotypeCaller's DP only counts filtered reads (MAPQ ≥ 20, downsampled), so a ratio a little below 1 is expected. Look for samples that stand out from the rest of the batch.
 
 ---
 
 ## Typical End-to-End Run (single sample, FENIX)
+
+Recommended: `bash bin/PIPELINE.single_sample_01-03.sh /data/sample01/` (see above). To run the steps by hand instead:
 
 ```bash
 # 1. Align
@@ -426,4 +528,4 @@ bash bin/02_gatk_bam_qc_workflow.sh /output/bams/sample01.sort.bam /output/bqsr/
 bash bin/03_gatk_haplotype_caller.sh /output/bqsr/sample01.rmdup.mqfilt.bqsr.bam /output/gvcf/
 ```
 
-For batches: use the `*_batch-slurmer.sh` wrappers in `bin/supp/` in sequence, waiting for each stage to complete before submitting the next.
+For batches: `bin/supp/BATCH.submit_S01-S03.sh`. Alternatively, run the per-step `*.seq_batch-slurmer.sh` wrappers in `bin/supp/` in sequence, waiting for each stage to finish before submitting the next.
