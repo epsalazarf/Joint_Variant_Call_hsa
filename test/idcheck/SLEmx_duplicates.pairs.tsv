@@ -1,0 +1,20 @@
+# SLEmx duplicate-ID identity check (from SLEmx.fast_scan.2026-10-06.tsv)
+# label<TAB>sample_dir_A<TAB>sample_dir_B
+# --- duplicate IDs: two independent datasets each ---
+L055	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch12/L55	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/L055
+L068	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch12/L68	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/L068
+L061	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch16/L061	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch23/L61
+L065	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch16/L065	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch23/L65
+L066	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch16/L066	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch23/L66
+L093	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch18/L093	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/L093
+LES037	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch20/LES037	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/LES037
+LES038	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch20/LES038	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/LES038
+LES039	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch20/LES039	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/LES039
+HL050	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch16/HL050	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch24/HL050
+HL078	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch16/HL078	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch24/HL078
+# --- same anomaly (chrX 0.8, chr20 1.3): same individual? ---
+Qro113_vs_Qro115	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch21/Qro113	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch21/Qro115
+# --- controls: presumed unrelated, matched batch/depth (expect DIFFERENT) ---
+ctrl_6x_L055_vs_L068	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/L055	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch26/L068
+ctrl_22x_L55_vs_L53	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch12/L55	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch12/L53
+ctrl_5x_HL050_vs_HL053	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch24/HL050	/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC/Batch24/HL053

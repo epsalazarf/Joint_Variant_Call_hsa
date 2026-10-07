@@ -21,6 +21,7 @@ bin/
 └── supp/
     ├── BATCH.submit_S01-S03.sh             # Run the launcher on every sample of a batch dir
     ├── SUMMARY.sample_stats_S01-S03.sh     # Per-sample TSV: stage, sizes, times, QC, depth
+    ├── IDCHECK.gvcf_pair_concordance.sh    # Are two sample dirs the same individual? (GVCF genotypes)
     ├── 00_scan_fastq_pairs.sh              # Inspect FASTQ pairs before mapping
     ├── 00_glimpse2_ref_panel_prep.sh       # Prepare GLIMPSE2 binary reference panel
     ├── 02a_bqsr_evaluate.sh                # Retroactive BQSR covariate plots
@@ -510,6 +511,28 @@ Default output: `./<first_dir>.S01-S03_summary.<date>.tsv`.
 - `fast` (default when you pass only `--gvcf-depth`): chr20 only, about a minute per sample. Use it as a quick check on finished samples.
 - `full`: chr1–22, `-j` chromosomes in parallel (default 4). Use it for the final report.
 - `gvcf_vs_mosdepth` compares against mosdepth over the **same** region. HaplotypeCaller's DP only counts filtered reads (MAPQ ≥ 20, downsampled), so a ratio a little below 1 is expected. Look for samples that stand out from the rest of the batch.
+
+
+---
+
+## Sample Identity Check (duplicate IDs)
+
+Before Step 04, every sample ID must map to one individual. When the same ID shows up in two batches as two separate datasets, check whether they're the same person. If they are, merge both datasets into one Step 02 run (it accepts several BAMs). If not, rename one of them.
+
+```bash
+bash bin/supp/IDCHECK.gvcf_pair_concordance.sh pairs.tsv [-o out.tsv] [-c chr20] [-q 20]
+```
+
+`pairs.tsv` has one comparison per line: `label<TAB>sample_dir_A<TAB>sample_dir_B`. Each sample's genotype is read from its GVCF (default chr20) at every confident SNP called in either sample; hom-ref blocks count as a 0/0 call.
+
+| Verdict | Rule | Meaning |
+|---------|------|---------|
+| `SAME` | IBS0 < 0.5 % and discordance < 25 % | Same individual: merge the datasets |
+| `RELATIVE?` | IBS0 < 2 % and discordance ≥ 25 % | First-degree relatives (e.g. parent/child) |
+| `DIFFERENT` | IBS0 ≥ 2 % | Unrelated |
+| `UNCLEAR` | anything else | Look at more chromosomes (`-c`) |
+
+IBS0 is the share of sites where one sample is 0/0 and the other 1/1. It stays near 0 for the same person even at low depth, where hets get miscalled as homs. The thresholds come from a simulation, so include a few presumed-unrelated pairs as controls. `test/idcheck/SLEmx_duplicates.pairs.tsv` is a worked example.
 
 ---
 
