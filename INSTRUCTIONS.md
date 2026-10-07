@@ -517,7 +517,7 @@ Default output: `./<first_dir>.S01-S03_summary.<date>.tsv`.
 
 ## Sample Identity Check (duplicate IDs)
 
-Before Step 04, every sample ID must map to one individual. When the same ID shows up in two batches as two separate datasets, check whether they're the same person. If they are, merge both datasets into one Step 02 run (it accepts several BAMs). If not, rename one of them.
+Before Step 04, every sample ID must map to one individual. When the same ID shows up in two batches as two separate datasets, check whether they're the same person. If they are, keep the better copy, or merge both datasets into one Step 02 run (it accepts several BAMs). If not, rename one of them.
 
 ```bash
 bash bin/supp/IDCHECK.gvcf_pair_concordance.sh pairs.tsv [-o out.tsv] [-c chr20] [-q 20]
@@ -527,12 +527,12 @@ bash bin/supp/IDCHECK.gvcf_pair_concordance.sh pairs.tsv [-o out.tsv] [-c chr20]
 
 | Verdict | Rule | Meaning |
 |---------|------|---------|
-| `SAME` | IBS0 < 0.5 % and discordance < 25 % | Same individual: merge the datasets |
-| `RELATIVE?` | IBS0 < 2 % and discordance ≥ 25 % | First-degree relatives (e.g. parent/child) |
-| `DIFFERENT` | IBS0 ≥ 2 % | Unrelated |
-| `UNCLEAR` | anything else | Look at more chromosomes (`-c`) |
+| `SAME` | IBS0 < 0.1 % and discordance < 30 % | Same individual: keep the better copy (or merge the datasets) |
+| `RELATIVE?` | IBS0 < 0.5 % and discordance ≥ 30 % | First-degree relatives (e.g. parent/child) |
+| `DIFFERENT` | IBS0 ≥ 1 % | Unrelated |
+| `UNCLEAR` | anything else (IBS0 0.5–1 %, e.g. siblings) | Look at more chromosomes (`-c`) |
 
-IBS0 is the share of sites where one sample is 0/0 and the other 1/1. It stays near 0 for the same person even at low depth, where hets get miscalled as homs. The thresholds come from a simulation, so include a few presumed-unrelated pairs as controls. `test/idcheck/SLEmx_duplicates.pairs.tsv` is a worked example.
+IBS0 is the share of sites where one sample is 0/0 and the other 1/1. It stays near 0 for the same person even at low depth, where hets get miscalled as homs. Thresholds are calibrated on SLEmx data: same-person pairs (5–23×) show IBS0 0.000–0.005 % and 12–22 % discordance, unrelated pairs 1.8 % (5×) to 5.8 % (22×) IBS0. Unrelated IBS0 drops at low depth, so keep a few presumed-unrelated pairs as controls. `test/idcheck/SLEmx_duplicates.pairs.tsv` is a worked example.
 
 ---
 

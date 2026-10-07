@@ -9,7 +9,7 @@
 # Author      : Pavel Salazar-Fernandez (epsalazarf@gmail.com)
 # Institution : LIIGH (UNAM-J)
 # Date        : 2026-10-06
-# Version     : 1.0
+# Version     : 1.1
 # Usage       : IDCHECK.gvcf_pair_concordance.sh <pairs.tsv> [-o out.tsv] [-c chrom] [-q min_gq]
 #               pairs.tsv — TAB-separated, one comparison per line:
 #                           <label> <sample_dir_A> <sample_dir_B>
@@ -28,14 +28,17 @@
 #                   (opposite homozygotes: should be ~0 for the same person,
 #                   even at low depth where hets get miscalled as homs)
 #   Verdict (heuristic):
-#     SAME      ibs0 < 0.5% and discord < 25%
-#     RELATIVE? ibs0 < 2%   and discord >= 25%  (parent/child share an allele at
-#               every site, so ibs0 stays ~0 while discordance is high)
-#     DIFFERENT ibs0 >= 2%
-#     UNCLEAR   anything else (ibs0 0.5-2% with low discordance)
-#   Simulation (GQ>=20): same person 6x/6x and 6x/22x → discord ~1.4%, ibs0 0;
-#   parent/child → 52%, 0.5%; unrelated → 66-70%, 6-8%. CALIBRATE on real data:
-#   include a couple of known-different pairs (same batch/depth) as controls.
+#     SAME      ibs0 < 0.1% and discord < 30%
+#     RELATIVE? ibs0 < 0.5% and discord >= 30%  (parent/child share an allele at
+#               every site, so ibs0 stays near the error floor while discordance
+#               is high)
+#     DIFFERENT ibs0 >= 1%
+#     UNCLEAR   anything else (ibs0 0.5-1%: e.g. siblings)
+#   Calibration, SLEmx real data (chr20, GQ>=20, 2026-10-07): 11 same-person
+#   pairs at 5-23x → ibs0 0.000-0.005%, discord 12-22%; 4 unrelated pairs →
+#   ibs0 1.8% (5x) to 5.8% (22x), discord 45-61%. Unrelated ibs0 drops with
+#   depth (fewer confident homs), hence the 1% cut. Simulated parent/child →
+#   ibs0 0.49%, discord 52%. Keep a couple of presumed-unrelated control pairs.
 # =============================================================================
 
 set -uo pipefail   # no -e: one bad pair must not abort the others
@@ -51,7 +54,7 @@ while [ $# -gt 0 ]; do
     -o) OUT_TSV="${2:?-o needs a file name}"; shift 2 ;;
     -c) CHROM="${2:?-c needs a chromosome}"; shift 2 ;;
     -q) MIN_GQ="${2:?-q needs a number}"; shift 2 ;;
-    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,41p' "$0"; exit 0 ;;
     *)  PAIRS="$1"; shift ;;
   esac
 done
@@ -144,10 +147,10 @@ compare_pair() {   # $1 label  $2 dirA  $3 dirB
         END {
           if (n == 0) { print label, da, db, na, nb, 0, "NA", "NA", "NO_OVERLAP"; exit }
           dp = 100 * dis / n; ip = 100 * ibs0 / n
-          if      (ip < 0.5 && dp < 25) v = "SAME"
-          else if (ip < 2 && dp >= 25)  v = "RELATIVE?"
-          else if (ip >= 2)             v = "DIFFERENT"
-          else                          v = "UNCLEAR"
+          if      (ip < 0.1 && dp < 30)  v = "SAME"
+          else if (ip < 0.5 && dp >= 30) v = "RELATIVE?"
+          else if (ip >= 1)              v = "DIFFERENT"
+          else                           v = "UNCLEAR"
           printf "%s\t%s\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%s\n", label, da, db, na, nb, n, dp, ip, v
         }'
 }
