@@ -133,7 +133,9 @@ samples, ~30 GB, one fragment. Both waves succeeded.
 - **Memory scales with contig size** (`seff`): chr22 6.7 GB, chr1 `create` 27 GB,
   chr1 `update`+consolidate **32 GB / 32 GB (100%)**. Native TileDB, not heap.
   → launcher now sets `--mem`/`--time` per contig class (chr1-2 64G/20h ·
-  chr3-8,X 32G/12h · rest 16G/6h) + a `--batch` knob (50→25 halves import RAM).
+  chr3-8,X 32G/12h · rest 16G/6h; walltimes later raised to 48h/24h/12h,
+  2026-10, after >20x samples hit the old walls) + a `--batch` knob (50→25
+  halves import RAM).
 - CPU efficiency 13–18% at 4 cores — cores useless, confirmed again.
 - Storage: ~332 MB/sample on chr1 → whole-genome 93-sample DB ≈ **375–400 GB**.
 - setgid on the output dir set group=`amedina` on the new files, but GenomicsDB

@@ -139,9 +139,14 @@ Two facts:
 
 | class | contigs | `--mem` | `--time` |
 |-------|---------|---------|----------|
-| big | chr1, chr2 | 64G | 20h |
-| mid | chr3–8, chrX | 32G | 12h |
-| small | chr9–22, chrY, chrM | 16G | 6h |
+| big | chr1, chr2 | 64G | 48h |
+| mid | chr3–8, chrX | 32G | 24h |
+| small | chr9–22, chrY, chrM | 16G | 12h |
+
+> Walltimes were 20h / 12h / 6h (sized from the JAGUAR tests) until a >20x
+> cohort hit the wall on every class (2026-10). They are now 2× that, rounded
+> up to half-days. `--mem` is unchanged; deeper samples carry more TileDB
+> fragment data, so watch `seff` MaxRSS on the big class if memory gets tight.
 
 `-Xmx6g` (`GENDBI_JAVA_MEM`), `--reader-threads 2`,
 `--genomicsdb-shared-posixfs-optimizations true`. `--batch-size` defaults to 50;

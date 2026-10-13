@@ -11,9 +11,10 @@
 #               93 samples for this run, no update wave needed.
 #
 #               Meant to be started ONCE and left unattended (e.g. over a
-#               weekend). Bounded by the slowest class (chr1/chr2, ~20h from
-#               the chr1 test — see docs/S04_GenomicsDBImport_design.md), not
-#               by the sum of all 25 chromosomes (~8 days if run serially).
+#               weekend). Bounded by the slowest class (chr1/chr2, ~20h measured
+#               on the JAGUAR chr1 test — see docs/S04_GenomicsDBImport_design.md;
+#               walltime is set to 48h since deeper >20x samples run longer),
+#               not by the sum of all 25 chromosomes (~8 days if run serially).
 #
 #               Safe to re-run: Step 04 skips a chromosome whose workspace
 #               already has callset.json + vidmap.json, so if some tasks fail
@@ -58,7 +59,10 @@ declare -A CLASS_CHROMS=(
   [small]="chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22 chrY chrM"
 )
 declare -A CLASS_MEM=([big]="64G" [mid]="32G" [small]="16G")
-declare -A CLASS_HOURS=([big]=20 [mid]=12 [small]=6)
+# Walltimes = 2x the first measured values (20/12/6 h), rounded up to half-days,
+# because deeper (>20x) samples import slower than the JAGUAR tests: 20h -> 48h,
+# 12h -> 24h, 6h -> 12h. Every class hit the old wall on a >20x cohort (2026-10).
+declare -A CLASS_HOURS=([big]=48 [mid]=24 [small]=12)
 declare -A CLASS_CONC=([big]=2 [mid]=4 [small]=6)
 # <\CONFIG> -----------------------------------------------------------------
 

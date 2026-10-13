@@ -155,7 +155,9 @@ Guiding philosophy (per maintainer, 2026-08-31):
                             fragment data, not heap): chr22 6.7 GB/72 min,
                             chr1 27 GB/7.7 h create, chr1 32 GB/21 h update+consol.
                             Launcher scales --mem/--time by contig class
-                            (chr1-2 64G/20h, chr3-8+X 32G/12h, rest 16G/6h);
+                            (chr1-2 64G/48h, chr3-8+X 32G/24h, rest 16G/12h;
+                            walltimes were 20/12/6h until >20x samples hit
+                            every wall, doubled + rounded to half-days 2026-10);
                             GENDBI_BATCH_SIZE 50->25 halves import RAM. -Xmx6g.
     * S05  GenotypeGVCFs, per chromosome. Reading the GenomicsDB from /mnt/data
            (NFS) is I/O-BOUND: a SelectVariants smoke-test on chr1:1-500000 of

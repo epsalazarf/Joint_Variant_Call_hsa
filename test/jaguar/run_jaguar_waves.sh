@@ -32,9 +32,11 @@
 #   TileDB fragment data is ~5x bigger on chr1 than chr22). test02: chr1 create
 #   of 47 samples used 27 GB; the update+consolidate hit 32 GB (100%). So the
 #   --mem / --hours defaults below are keyed to the contig:
-#     chr1, chr2                 -> 64G / 20h
-#     chr3-8, chrX               -> 32G / 12h
-#     chr9-22, chrY, chrM        -> 16G /  6h
+#     chr1, chr2                 -> 64G / 48h
+#     chr3-8, chrX               -> 32G / 24h
+#     chr9-22, chrY, chrM        -> 16G / 12h
+#   Walltimes are 2x the first measured values (20/12/6 h) rounded up to
+#   half-days: deeper (>20x) samples hit the old walls on every class (2026-10).
 #   Override with --mem / --hours for anything unusual.
 #
 #   cohort_root  dir containing bam/<SAMPLE>/chrom_gvcf/...
@@ -81,7 +83,7 @@ chrom_class() {
   esac
 }
 default_mem()   { case "$(chrom_class "$1")" in big) echo 64G ;; mid) echo 32G ;; *) echo 16G ;; esac; }
-default_hours() { case "$(chrom_class "$1")" in big) echo 20  ;; mid) echo 12  ;; *) echo 6  ;; esac; }
+default_hours() { case "$(chrom_class "$1")" in big) echo 48  ;; mid) echo 24  ;; *) echo 12 ;; esac; }
 
 CHROM="chr22" ; N_WAVES=3 ; TAG="jaguar" ; CPUS=2 ; MEM="" ; HOURS="" ; BATCH=50 ; PROFILE=false ; DRY=false
 pos=()

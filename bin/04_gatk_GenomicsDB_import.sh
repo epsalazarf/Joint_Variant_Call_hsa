@@ -73,7 +73,8 @@
 #     chr1   47 samp:   27 GB RAM,  7h40m  create    (seff 279778)
 #     chr1   93 samp:   32 GB RAM,  21 h    update+consolidate (seff 279779)
 #   The test/jaguar/run_jaguar_waves.sh launcher sets --mem / --time per contig
-#   class (chr1-2: 64G/20h · chr3-8,X: 32G/12h · rest: 16G/6h). -Xmx stays 6G
+#   class (chr1-2: 64G/48h · chr3-8,X: 32G/24h · rest: 16G/12h; walltimes were
+#   20/12/6h until >20x samples hit them — 2026-10). -Xmx stays 6G
 #   (the big footprint is native TileDB, not heap). If --mem is still tight,
 #   drop GENDBI_BATCH_SIZE to 25 — that roughly halves import memory.
 #
