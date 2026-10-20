@@ -128,6 +128,15 @@ echo "[i]    Genome  : ${ref_gnm}"
 [ -f "${ref_vars}" ] || { echo "[X]  Reference variants not found: ${ref_vars}"; exit 1; }
 echo "[i]    Variants: ${ref_vars}"
 
+# Guard: single-sample BAM (-ERC GVCF rejects >1 distinct @RG SM)
+if command -v samtools >/dev/null 2>&1; then
+  bam_sm="$(samtools view -H "$BAM_FILE" | awk -F'\t' '$1=="@RG"{for(i=2;i<=NF;i++) if($i ~ /^SM:/) print substr($i,4)}' | sort -u | paste -sd, -)"
+  case "$bam_sm" in
+    "") echo "[X]  CANCELLED: no @RG SM tag in $BAM_FILE"; exit 1 ;;
+    *,*) echo "[X]  CANCELLED: BAM holds >1 sample (SM: $bam_sm). Reheader to one SM first."; exit 1 ;;
+  esac
+fi
+
 # <\ENV> ----------------------------------------------------------------------
 
 # <FUNCTIONS> -----------------------------------------------------------------

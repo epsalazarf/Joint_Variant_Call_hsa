@@ -48,7 +48,7 @@ done
 
 [ -f "$PAIRS" ] || { echo "<ERROR> pairs file not found: $PAIRS" >&2; exit 1; }
 HAVE_ST=true
-command -v samtools >/dev/null 2>&1 || { HAVE_ST=false; echo "[W]  samtools not on PATH (module load samtools): header checks skipped" >&2; }
+command -v samtools >/dev/null 2>&1 || { echo "<ERROR> samtools not on PATH (module load samtools): SM/@SQ checks are required" >&2; exit 1; }
 
 echo "[i]  dest : $DEST   mode: $($APPLY && echo APPLY || echo dry-run)" >&2
 printf '# label\tsource_bam\tlink_path\tstatus\n'
