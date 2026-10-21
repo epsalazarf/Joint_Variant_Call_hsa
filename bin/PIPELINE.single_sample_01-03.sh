@@ -257,7 +257,12 @@ bash '${script}' \"\${SCRIPT_ARGS[@]}\"
 _cb_fail=0
 _cb() {   # \$1 = source file (under scratch)   \$2 = destination directory
   local s=\"\$1\" d=\"\$2/\$(basename \"\$1\")\"
-  cp -f \"\$s\" \"\$d\" || { echo \"<ERROR> cp failed: \$s\" >&2; _cb_fail=1; return; }
+  # O_DIRECT write bypasses the page cache: a plain cp of a multi-GB BAM to NFS
+  # piles up dirty pages charged to the job cgroup and got OOM-killed (2026-10,
+  # L068 S02). Fall back to cp where O_DIRECT is unsupported; retry cp once.
+  dd if=\"\$s\" of=\"\$d\" bs=64M oflag=direct status=none 2>/dev/null \\
+    || cp -f \"\$s\" \"\$d\" || { sleep 30; cp -f \"\$s\" \"\$d\"; } \\
+    || { echo \"<ERROR> cp failed: \$s\" >&2; _cb_fail=1; return; }
   [ \"\$(stat -c%s \"\$s\" 2>/dev/null)\" = \"\$(stat -c%s \"\$d\" 2>/dev/null)\" ] || {
     echo \"<ERROR> size mismatch after copy: \$d\" >&2; _cb_fail=1; return; }
   case \"\$s\" in
@@ -406,6 +411,21 @@ fi
 # the single-threaded tail (~7h at 8GB, ~12h at 9.5GB observed — 48h wall).
 
 if have_output "*.rmdup.mqfilt.bqsr.bam"; then
+  # A present-but-truncated BAM (e.g. copy-back killed mid-write, 2026-10 L068)
+  # must not be skipped into S03. Abort rather than silently redo a ~17 h S02:
+  # the intact copy is usually still in the preserved scratch dir.
+  command -v samtools >/dev/null 2>&1 || module load samtools >/dev/null 2>&1 || true
+  if command -v samtools >/dev/null 2>&1; then
+    for _b in "$SAMPLE_DIR"/*.rmdup.mqfilt.bqsr.bam; do
+      samtools quickcheck "$_b" 2>/dev/null || {
+        echo "<ERROR> Step 02 output is truncated/corrupt: $_b"
+        echo "<ERROR> Restore it from the preserved scratch dir (see the S02 log), or delete it to rerun Step 02."
+        exit 1
+      }
+    done
+  else
+    echo "[!]  samtools unavailable — Step 02 BAM integrity not checked"
+  fi
   echo "[SKIP] Step 02 — analysis-ready BAM already present in ${SAMPLE_DIR}"
   # Don't let a lingering S01 dependency (e.g. S01 was redundantly resubmitted
   # for a legacy dir, or is simply unrelated) leak forward onto S03 — S02's
