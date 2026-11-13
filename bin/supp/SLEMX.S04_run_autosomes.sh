@@ -27,9 +27,14 @@
 #               walltime) run the script again and only the missing ones go.
 #
 # Usage       : bash SLEMX.S04_run_autosomes.sh [--map FILE] [--out DIR]
-#                                                [--check | --dry-run | --status]
+#                                                [--build-map | --check | --dry-run | --status]
+#                 --build-map regenerate the cohort map from BAMQC/Batch*/*/chrom_gvcf
+#                             with the 2026-10-23 selection rule (all dirs, minus
+#                             the original copies of the merged IDs, minus
+#                             EXCLUDED), write it to the --map path, stop.
+#                             Review it, then run --check.
 #                 --map FILE  cohort sample map (label <TAB> sample or chrom_gvcf
-#                             dir). Default: <out>/SLEmx_JVC.sample_map.2026-10-23.tsv
+#                             dir). Default: <out>/SLEmx_JVC.sample_map.tsv
 #                 --out DIR   output root (default /mnt/data/amedina/esalazarf/SLEmx_JVC)
 #                             -> <out>/genomicsdb/chr1..chr22, <out>/logs/
 #                 --check     pre-flight only, submit nothing
@@ -44,7 +49,7 @@ set -euo pipefail
 
 # <CONFIG> ----------------------------------------------------------------
 OUTPUT_ROOT="/mnt/data/amedina/esalazarf/SLEmx_JVC"
-MAP_NAME="SLEmx_JVC.sample_map.2026-10-23.tsv"
+MAP_NAME="SLEmx_JVC.sample_map.tsv"   # same selection as SLEmx_JVC.sample_map.2026-10-23.tsv
 BAMQC_ROOT="${SLEMX_BAMQC_ROOT:-/mnt/data/amedina/esalazarf/SLEmx-b38/BAMQC}"   # env override: local tests only
 MERGED_BATCH="Batch25"           # Step 02 re-merge of the duplicate IDs
 EXPECTED_N=164                   # warn (not fail) if the map has a different count
@@ -83,10 +88,11 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --map)     MAP_IN="${2:?--map needs a file}"; shift 2 ;;
     --out)     OUTPUT_ROOT="${2:?--out needs a directory}"; shift 2 ;;
+    --build-map) MODE="build"; shift ;;
     --check)   MODE="check";  shift ;;
     --dry-run) MODE="dry";    shift ;;
     --status)  MODE="status"; shift ;;
-    -h|--help) sed -n '3,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '4,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         echo "[X]  unknown argument: $1  (--help)"; exit 2 ;;
   esac
 done
@@ -109,6 +115,52 @@ if [[ "$MODE" == status ]]; then
   exit 0
 fi
 
+# --- build-map mode: regenerate the cohort map, then stop --------------------
+# Rule (reproduces the 2026-10-23 selection from the 2026-10-07 full scan:
+# 178 dirs - 22 originals - 3 excluded + 11 Batch25 merges = 164):
+#   every BAMQC/Batch*/<sample>/chrom_gvcf, label = <sample> dir name,
+#   minus both original per-batch dirs of each merged ID in the pairs file,
+#   minus EXCLUDED labels. Batch25/<ID> is picked up by the scan itself.
+if [[ "$MODE" == build ]]; then
+  [[ -f "$PAIRS" ]] || { echo "[X]  Duplicate-ID pairs file not found: $PAIRS"; exit 1; }
+  [[ -d "$BAMQC_ROOT" ]] || { echo "[X]  BAMQC root not found: $BAMQC_ROOT"; exit 1; }
+  [[ -e "$MAP_IN" ]] && { echo "[X]  $MAP_IN already exists — move it away first, or pass --map NEW_FILE"; exit 1; }
+  declare -A DROP=()
+  while IFS=$'\t' read -r label dirA dirB _; do
+    case "$label" in ''|'#'*|*_vs_*) continue ;; esac
+    for o in "$dirA" "$dirB"; do DROP[$(readlink -f "$o" 2>/dev/null || echo "$o")]="$label"; done
+  done < "$PAIRS"
+  mkdir -p "$(dirname "$MAP_IN")"
+  tmp="$MAP_IN.tmp"
+  printf '# SLEmx S04 cohort map, rebuilt %s by %s --build-map\n# rule: BAMQC/Batch*/*/chrom_gvcf - merged-ID originals (%s) - EXCLUDED (%s)\n' \
+    "$(date +%F)" "$(basename "$0")" "$(basename "$PAIRS")" "${EXCLUDED[*]}" > "$tmp"
+  n=0; n_drop=0; n_excl=0
+  declare -A PER_BATCH=()
+  for d in "$BAMQC_ROOT"/Batch*/*/chrom_gvcf; do
+    [[ -d "$d" ]] || continue
+    sdir="$(dirname "$d")"; label="$(basename "$sdir")"; batch="$(basename "$(dirname "$sdir")")"
+    rs="$(readlink -f "$sdir")"
+    if [[ -n "${DROP[$rs]:-}" || -n "${DROP[$sdir]:-}" ]]; then
+      echo "[-]  original copy of merged ${DROP[$rs]:-${DROP[$sdir]}}: $batch/$label"; n_drop=$((n_drop + 1)); continue
+    fi
+    if [[ " ${EXCLUDED[*]} " == *" $label "* ]]; then
+      echo "[-]  excluded: $batch/$label"; n_excl=$((n_excl + 1)); continue
+    fi
+    printf '%s\t%s\n' "$label" "$(readlink -f "$d")" >> "$tmp"
+    PER_BATCH[$batch]=$(( ${PER_BATCH[$batch]:-0} + 1 )); n=$((n + 1))
+  done
+  mv "$tmp" "$MAP_IN"
+  echo
+  echo "[i]  per batch: $(for b in $(printf '%s\n' "${!PER_BATCH[@]}" | sort -V); do printf '%s=%s ' "$b" "${PER_BATCH[$b]}"; done)"
+  echo "[i]  dropped $n_drop merged-ID originals (expect 22), $n_excl excluded (expect 3)"
+  dups="$(grep -v '^#' "$MAP_IN" | cut -f1 | sort | uniq -d | paste -sd' ' -)"
+  [[ -n "$dups" ]] && echo "[!]  labels listed more than once (fix before --check): $dups"
+  if (( n == EXPECTED_N )); then echo "[OK] wrote $MAP_IN — $n samples (matches the 2026-10-23 selection count)"
+  else echo "[!]  wrote $MAP_IN — $n samples, EXPECTED $EXPECTED_N: new/removed dirs since 2026-10-23? Review before --check."; fi
+  echo "[i]  Next: bash $0 --check"
+  exit 0
+fi
+
 # <CHECKS> ------------------------------------------------------------------
 ERR=0
 fail() { echo "[X]  $*"; ERR=$((ERR + 1)); }
@@ -121,7 +173,7 @@ echo
 
 [[ -f "$S04" ]]   || { echo "[X]  Step 04 script not found: $S04"; exit 1; }
 [[ -f "$PAIRS" ]] || { echo "[X]  Duplicate-ID pairs file not found: $PAIRS"; exit 1; }
-[[ -s "$MAP_IN" ]] || { echo "[X]  Sample map not found or empty: $MAP_IN"; echo "[i]  Copy it there, or pass --map /path/to/$MAP_NAME"; exit 1; }
+[[ -s "$MAP_IN" ]] || { echo "[X]  Sample map not found or empty: $MAP_IN"; echo "[i]  Regenerate it: bash $0 --build-map   (or pass --map FILE)"; exit 1; }
 case "$OUTPUT_ROOT/" in
   "$HOME"/*) echo "[X]  Output root is under \$HOME — FENIX home has a hard quota. Use group storage."; exit 1 ;;
 esac
