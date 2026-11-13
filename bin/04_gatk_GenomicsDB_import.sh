@@ -167,6 +167,10 @@ avail_kb=$(df -Pk "$OUTPUT_PATH" 2>/dev/null | awk 'NR==2{print $4}')
 #                            and bump --verbosity to INFO so GATK logs per-batch
 #                            + consolidation timings. Default false.
 #   GENDBI_VERBOSITY       — GenomicsDBImport --verbosity (default ERROR)
+#   GENDBI_SCRATCH_ROOT    — overrides config `scratch_root` (workspace is built
+#                            in <root>/$USER/gendbi_<job>). Use the PRIMARY-group
+#                            volume, /scratch/groups/$(id -gn): it is reachable
+#                            on every node, unlike the guest-group amedina tree.
 njobs="${GENDBI_READER_THREADS:-${SLURM_CPUS_PER_TASK:-2}}"
 BATCH_SIZE="${GENDBI_BATCH_SIZE:-50}"
 STRICT_GVCF="${GENDBI_STRICT_GVCF:-false}"
@@ -228,6 +232,7 @@ echo "[i]  Reference  : ${ref_gnm}"
 
 # Scratch: this step DOES benefit from scratch (random-access TileDB I/O).
 # Build the workspace on scratch, copy the finished product back to OUTPUT_PATH.
+scratch_root="${GENDBI_SCRATCH_ROOT:-${scratch_root:-}}"
 if [[ -n "${scratch_root:-}" && "$env_type" == "remote" ]]; then
   USE_SCRATCH=true
   SCRATCH_BASE="${scratch_root}/${USER}/gendbi_${SLURM_JOB_ID:-$$}_${EPOCHSECONDS}"
