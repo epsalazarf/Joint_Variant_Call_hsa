@@ -71,9 +71,19 @@ declare -A CLASS_CHROMS=(
   [mid]="chr3 chr4 chr5 chr6 chr7 chr8"
   [small]="chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22"
 )
-declare -A CLASS_MEM=([big]="64G" [mid]="32G" [small]="16G")
-declare -A CLASS_HOURS=([big]=96 [mid]=48 [small]=24)
+#
+# 2026-11-13 run (jobs 457714-16): big (64G) and chr21/22 passed. ALL 18 other
+# tasks imported all 164 samples, then were OOM-killed in the final
+# `--consolidate` pass (mid at 32G, small at 16G). Consolidation rewrites the
+# whole array, and its memory exceeds the import. It is not needed:
+# GenotypeGVCFs reads a multi-fragment workspace (164 samples / batch 50 = 4
+# fragments). So mid/small now skip it (CLASS_CONSOL=false). chr1/2/21/22 stay
+# as built (consolidated). Memory/time get headroom over the import alone
+# (small import took up to ~20.5 h of the old 24 h wall).
+declare -A CLASS_MEM=([big]="64G" [mid]="48G" [small]="24G")
+declare -A CLASS_HOURS=([big]=96 [mid]=72 [small]=48)
 declare -A CLASS_CONC=([big]=2 [mid]=4 [small]=6)
+declare -A CLASS_CONSOL=([big]=true [mid]=false [small]=false)
 # <\CONFIG> -----------------------------------------------------------------
 
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -312,6 +322,7 @@ submit_class() {
   if (( ${#chrs[@]} == 0 )); then echo "[SKIP] class=$class — already built"; return 0; fi
 
   local mem="${CLASS_MEM[$class]}" hours="${CLASS_HOURS[$class]}" conc="${CLASS_CONC[$class]}"
+  local consol="${CLASS_CONSOL[$class]}"
   local jobname="JVC-GDBI-${TAG}-${class}"
   local logfile="${LOG_DIR}/${TAG}-${class}-%A_%a.out"
   # Scratch = PRIMARY-group volume, resolved on the compute node (reachable on
@@ -325,14 +336,14 @@ _chrom=\"\${_chrs[\$((SLURM_ARRAY_TASK_ID - 1))]:-}\"
 _scr=\"/scratch/groups/\$(id -gn)\"
 mkdir -p \"\$_scr/\$USER\" || { echo \"<ERROR> scratch not writable on \$(hostname): \$_scr/\$USER\" >&2; exit 1; }
 echo \"[i] array task \$SLURM_ARRAY_TASK_ID -> \$_chrom  (class ${class}, node \$(hostname), scratch \$_scr)\"
-env GENDBI_SCRATCH_ROOT=\"\$_scr\" GENDBI_READER_THREADS=2 \\
+env GENDBI_SCRATCH_ROOT=\"\$_scr\" GENDBI_READER_THREADS=2 GENDBI_CONSOLIDATE=${consol} \\
   bash '$S04' '$FROZEN_MAP' '$OUTPUT_ROOT' \"\$_chrom\" '$ACTION'
 # TileDB writes 0700 files; open the finished workspace to the data group.
 chgrp -R '$DATA_GROUP' '$OUTPUT_ROOT/genomicsdb/'\"\$_chrom\" 2>/dev/null \\
   && chmod -R g+rX '$OUTPUT_ROOT/genomicsdb/'\"\$_chrom\" \\
   || echo \"[!] could not open \$_chrom workspace to group $DATA_GROUP — run: chgrp -R $DATA_GROUP ...; chmod -R g+rX ...\"
 "
-  echo "[*]  class=$class  chroms=(${chrs[*]})  $mem / ${hours}h  %$conc concurrent"
+  echo "[*]  class=$class  chroms=(${chrs[*]})  $mem / ${hours}h  %$conc concurrent  consolidate=$consol"
   local args=(--parsable --job-name="$jobname" --array="1-${#chrs[@]}%${conc}"
               --nodes=1 --ntasks=1 --cpus-per-task=2 --mem="$mem" --time="${hours}:00:00"
               --output="$logfile" ${EXCL_ARG[@]+"${EXCL_ARG[@]}"})
