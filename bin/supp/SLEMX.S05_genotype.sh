@@ -55,13 +55,14 @@ OUTPUT_ROOT="/mnt/data/amedina/esalazarf/SLEmx_JVC"
 TAG="slemx"
 DATA_GROUP="amedina"
 AUTOSOMES="chr1 chr2 chr3 chr4 chr5 chr6 chr7 chr8 chr9 chr10 chr11 chr12 chr13 chr14 chr15 chr16 chr17 chr18 chr19 chr20 chr21 chr22"
-# Resources. Measured (164 samples): 500 kb of chr22 = 4.6 min, MaxRSS 4.2G;
-# whole chr22 / chr1 grew past 32G in ~2.5-3 h (12G Java heap, the rest
-# native). A 5 Mb window should run ~30-45 min and stay well under 16G; 32G
-# leaves room for dense regions (HLA on chr6). A SMALLER heap leaves more of
-# the job for GenomicsDB's native memory. Check sacct MaxRSS after chr22.
+# Resources. Measured (164 samples, 5 Mb windows, 8G Java heap; 2026-11-25,
+# chr1/6/19/20/21/22 = 131 windows, 0 failed): peak MaxRSS 15.7G (chr1
+# 35-40 Mb), 12-15G on dense windows, ~1.5G on all-N ones; longest window
+# 56 min. Whole chromosomes (no scatter) grew past 32G in ~2.5-3 h — native
+# GenomicsDB memory, not the Java heap. 24G = ~1.5x the worst window seen;
+# 4 h = ~4x the longest (a short limit helps SLURM backfill).
 CHUNK_MB=5
-CHUNK_MEM="32G";  CHUNK_JAVA_MEM="8G";  CHUNK_HOURS=12
+CHUNK_MEM="24G";  CHUNK_JAVA_MEM="8G";  CHUNK_HOURS=4
 PAR=10                                   # running windows per chromosome
 GATHER_MEM="8G";  GATHER_HOURS=24
 REGION_MEM="16G"; REGION_JAVA_MEM="8G"; REGION_HOURS=12
