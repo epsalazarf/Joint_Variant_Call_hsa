@@ -112,8 +112,9 @@ BGZF_EOF="1f8b08040000000000ff0600424302001b0003000000000000000000"
 bgzf_complete() { [[ "$(tail -c 28 "$1" 2>/dev/null | od -An -v -tx1 | tr -d ' \n')" == "$BGZF_EOF" ]]; }
 tranche_table() {
   awk -F, '/^#/ {next} /^targetTruthSensitivity/ {for (i=1;i<=NF;i++) h[$i]=i; next}
-           ("targetTruthSensitivity" in h) {printf "       %7s  known=%-9s novel=%-9s TiTv=%s/%s  minVQSLod=%s\n",
-             $h["targetTruthSensitivity"], $h["numKnown"], $h["numNovel"], $h["knownTiTv"], $h["novelTiTv"], $h["minVQSLod"]}' "$1"
+           ("targetTruthSensitivity" in h) {titv = ($h["knownTiTv"]+0 == 0 && $h["novelTiTv"]+0 == 0) ? "" : sprintf("TiTv=%s/%s  ", $h["knownTiTv"], $h["novelTiTv"])
+             printf "       %7s  known=%-9s novel=%-9s %sminVQSLod=%s\n",
+             $h["targetTruthSensitivity"], $h["numKnown"], $h["numNovel"], titv, $h["minVQSLod"]}' "$1"
 }
 
 # --- status -------------------------------------------------------------------
@@ -142,7 +143,7 @@ if [[ "$MODE" == report ]]; then
       echo; echo "[i]  $m model ($(cat "$OUT/model/${TAG}.$m.model_chroms.txt" 2>/dev/null | wc -w | tr -d ' ') chromosomes) — truth sensitivity tranches:"
       if [[ -s "$t" ]]; then tranche_table "$t"; else echo "       (not built)"; fi
     done
-    echo "[i]  Expect novel Ti/Tv ~2.0-2.1 for WGS SNPs at the 99.7 level; known ~2.1."
+    echo "[i]  SNP Ti/Tv (known/novel) at the filter tranche: novel ~2.0-2.1 is good for WGS; Ti/Tv does not apply to indels."
   fi
   echo; printf '  %-6s %10s %10s %6s  %s\n' chrom records PASS %PASS "top filters"
   tot=0; totp=0

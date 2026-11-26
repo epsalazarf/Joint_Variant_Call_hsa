@@ -267,21 +267,27 @@ stage_model() {
 
   local dbsnp="${ref_vars:-}"
   [[ -n "$dbsnp" ]] && done_vcf "$dbsnp" || { echo "<ERROR> dbSNP (config ref_vars) not found: ${dbsnp:-<unset>}"; exit 1; }
-  local res=() an=() tr=() gaussians
+  local res=() an=() tr=() gaussians tlist
   if [[ "$mode" == SNP ]]; then
     res=(--resource:hapmap,known=false,training=true,truth=true,prior=15 "$(bundle_file hapmap_3.3.hg38)"
          --resource:omni,known=false,training=true,truth=true,prior=12 "$(bundle_file 1000G_omni2.5.hg38)"
          --resource:1000G,known=false,training=true,truth=false,prior=10 "$(bundle_file 1000G_phase1.snps.high_confidence.hg38)"
          --resource:dbsnp,known=true,training=false,truth=false,prior=7 "$dbsnp")
     an=(-an QD -an MQRankSum -an ReadPosRankSum -an FS -an MQ -an SOR -an DP)
-    for x in 100.0 99.95 99.9 99.8 99.6 99.5 99.4 99.3 99.0 98.0 97.0 90.0; do tr+=(-tranche "$x"); done
+    # Broad WDL list + 99.7: ApplyVQSR cuts at the lowest tranche >= the level,
+    # so without a tranche AT the level the real cut is the next one up (99.8).
+    tlist="100.0 99.95 99.9 99.8 99.7 99.6 99.5 99.4 99.3 99.0 98.0 97.0 90.0"
+    case " $tlist " in *" $SNP_LEVEL "*) ;; *) tlist="$tlist $SNP_LEVEL" ;; esac
+    for x in $tlist; do tr+=(-tranche "$x"); done
     gaussians="$SNP_GAUSSIANS"
   else
     res=(--resource:mills,known=false,training=true,truth=true,prior=12 "$(bundle_file Mills_and_1000G_gold_standard.indels.hg38)"
          --resource:axiomPoly,known=false,training=true,truth=false,prior=10 "$(bundle_file Axiom_Exome_Plus.genotypes.all_populations.poly.hg38)"
          --resource:dbsnp,known=true,training=false,truth=false,prior=2 "$dbsnp")
     an=(-an FS -an ReadPosRankSum -an MQRankSum -an QD -an SOR -an DP)
-    for x in 100.0 99.95 99.9 99.5 99.0 97.0 96.0 95.0 94.0 93.5 93.0 92.0 91.0 90.0; do tr+=(-tranche "$x"); done
+    tlist="100.0 99.95 99.9 99.5 99.0 97.0 96.0 95.0 94.0 93.5 93.0 92.0 91.0 90.0"
+    case " $tlist " in *" $INDEL_LEVEL "*) ;; *) tlist="$tlist $INDEL_LEVEL" ;; esac
+    for x in $tlist; do tr+=(-tranche "$x"); done
     gaussians="$INDEL_GAUSSIANS"
   fi
   local plot=()
