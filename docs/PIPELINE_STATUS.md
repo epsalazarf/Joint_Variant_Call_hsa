@@ -16,8 +16,8 @@
 | 03a | `bin/03_gatk_haplotype_caller.sh` | ✅ Functional | per sample, **per chromosome** | 25-way scatter (launcher default) → `chrom_gvcf/*.raw_vars.<CHR>.g.vcf.gz` + gathered canon-chr GVCF; validated on Batch16 |
 | 03b | `bin/03_glimpse2_imputation.sh` | ⏸ Paused | per sample | low-coverage imputation; ref chunks not generated; **not** a GVCF producer |
 | **04** | **`bin/04_gatk_GenomicsDB_import.sh`** | ✅ **Validated on FENIX** | **per cohort, per chromosome** | **JAGUAR chr22, 93 samples, 3-wave incremental (test01, 2026-09-01); chr1 timing (test02); SLE cohort (test03). All-chromosome parallel launcher exists for JAGUAR only (`supp/JAGUAR.S04_run_all_chroms.sh`)** |
-| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | ⛔ Stub (empty) | per cohort, per chromosome | on hold until S04 proven |
-| 06 | `bin/06_gatk_vqsr.sh` | ⛔ Stub (empty) | per cohort | on hold; **config gap — VQSR resources missing** |
+| 05 | `bin/05_gatk_GenotypeGVCFs.sh` | ✅ **Done on FENIX** (2026-11-26) | per cohort, per chromosome, **scattered in 5 Mb windows** | SLEmx: 22 autosomes, 164 samples, 21.6M records (`supp/SLEMX.S05_genotype.sh`: window array + GatherVcfs). Whole-chromosome runs OOM at 32G — always scatter |
+| 06 | `bin/06_gatk_vqsr.sh` | 🟡 Built (2026-11-26), local tests pass | per cohort: prep/apply per chromosome, one genome-wide SNP + INDEL model | VQSR (default) or hard filters; resources staged by `supp/STAGE.vqsr_bundle_hg38.sh` (config `ref_vqsr_bundle`); launcher `supp/SLEMX.S06_vqsr.sh`. FENIX: chr22 test first |
 | — | `bin/PIPELINE.single_sample_01-03.sh` | ✅ Functional | per sample | chained S01→S03 SLURM launcher: resume, S03 scatter, verified scratch copy-back, free-space guard, node exclusion |
 | — | `bin/supp/BATCH.submit_S01-S03.sh` | ✅ Functional | per batch dir | loops the launcher over every sample subdir |
 | — | `bin/supp/SUMMARY.sample_stats_S01-S03.sh` | 🟡 New (2026-09-28) | per batch dir | per-sample TSV of stage / sizes / times / QC / depth; optional GVCF depth. Tested on synthetic data only |
@@ -44,10 +44,10 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
    │  04_gatk_GenomicsDB_import.sh   (cohort-level; one workspace per chromosome)
    ▼
 <out>/genomicsdb/<CHR>/                                 [GenomicsDB workspace per chromosome]
-   │  05_gatk_GenotypeGVCFs.sh       (gendb://<CHR>, per chromosome, then gather)   ── NOT BUILT
+   │  05_gatk_GenotypeGVCFs.sh       (gendb://<CHR>, 5 Mb windows, then gather)     ── DONE (SLEmx)
    ▼
 <cohort>.joint.vcf.gz                                   [joint-genotyped multi-sample VCF]
-   │  06_gatk_vqsr.sh                (SNP + INDEL passes, or hard-filter)          ── NOT BUILT
+   │  06_gatk_vqsr.sh                (SNP + INDEL passes, or hard-filter)          ── BUILT, FENIX test pending
    ▼
 <cohort>.filtered.vcf.gz                                [final callset]
 ```
@@ -78,8 +78,8 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | Blocker | Affects | Owner action |
 |---------|---------|--------------|
 | No **generic** per-chromosome SLURM launcher for S04 | S04 on new cohorts | generalise `supp/JAGUAR.S04_run_all_chroms.sh` (hard-coded paths) into `GENDBI.seq_batch-slurmer.sh` |
-| VQSR resource files absent from `config/config.yaml` | S05→S06 | add `ref_hapmap` / `ref_omni` / `ref_1kg_snp` / `ref_mills`; stage files on FENIX |
-| Cohort size for VQSR vs hard-filter undecided | S06 design | confirm expected N; small early cohorts need hard-filtering path |
+| VQSR resources not yet staged on FENIX | S06 | config key `ref_vqsr_bundle` added; run `bin/supp/STAGE.vqsr_bundle_hg38.sh` on a login node |
+| VQSR vs hard-filter | S06 design | decided: VQSR for SLEmx (164 WGS); `--method hardfilter` for small cohorts |
 | S03b produces phased VCF, not GVCF | pipeline diagram accuracy | when un-pausing 03b, add a `bcftools merge` path — do **not** route through S04/S05 |
 
 ---
@@ -108,8 +108,8 @@ chrom_gvcf/<SAMPLE>.raw_vars.<CHR>.g.vcf.gz (+ .tbi)    [per-chromosome GVCFs]  
 | Use `--sample-name-map` for scalable cohorts | S04 builds it per chromosome | ✅ |
 | Keep GenomicsDB off networked filesystems during import | S04 builds on `/scratch`, copies back | ✅ |
 | Incremental import for growing cohorts | S04 `update` action | ✅ |
-| Joint genotyping with GenotypeGVCFs (`gendb://`) | S05 — not built | ⛔ pending |
-| Filter with VQSR (or hard-filter for small cohorts) | S06 — not built | ⛔ pending |
+| Joint genotyping with GenotypeGVCFs (`gendb://`) | S05 — scattered windows + gather | ✅ done (SLEmx) |
+| Filter with VQSR (or hard-filter for small cohorts) | S06 — built | 🟡 FENIX test pending |
 
 ---
 
